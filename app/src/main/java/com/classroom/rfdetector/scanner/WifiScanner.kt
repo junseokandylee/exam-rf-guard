@@ -9,6 +9,8 @@ import android.net.wifi.WifiManager
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import com.classroom.rfdetector.core.RfObservation
+import com.classroom.rfdetector.core.RadioMetadata
+import com.classroom.rfdetector.core.WifiRadioMetadata
 import com.classroom.rfdetector.core.ScanSource
 import com.classroom.rfdetector.core.radioKey
 import kotlinx.coroutines.*
@@ -61,7 +63,13 @@ class WifiScanner(context: Context, private val scope: CoroutineScope) {
                         if (previousTimestamp != null && result.timestamp <= previousTimestamp) return@forEach
                         observedTimestamps[key] = result.timestamp
                         onObs(RfObservation(result.BSSID, ScanSource.WIFI, result.SSID?.takeIf { it.isNotBlank() }, result.level, null,
-                            result.SSID.isNullOrBlank(), now - (elapsed - result.timestamp / 1000)))
+                            result.SSID.isNullOrBlank(), now - (elapsed - result.timestamp / 1000), frequencyMhz = result.frequency,
+                            radioMetadata = RadioMetadata(wifi = WifiRadioMetadata(
+                                channelWidthCode = result.channelWidth,
+                                centerFrequency0Mhz = result.centerFreq0.takeIf { result.channelWidth != ScanResult.CHANNEL_WIDTH_20MHZ && it > 0 },
+                                centerFrequency1Mhz = result.centerFreq1.takeIf { result.channelWidth == ScanResult.CHANNEL_WIDTH_80MHZ_PLUS_MHZ && it > 0 },
+                                capabilities = result.capabilities?.takeIf { it.isNotBlank() },
+                            ))))
                     }
                 } catch (_: SecurityException) {
                     reportError("Wi-Fi 권한을 확인하세요 · 정확한 위치 권한이 필요합니다")

@@ -44,11 +44,12 @@ internal fun SignalSummary(signal: SnapshotSignal) {
     val audio = signal.audioNameMatch
     val wearable = signal.wearableNameMatch
     val nameBrand = audio?.brand ?: wearable?.brand
-    val distance = estimateDistance(signal.rssi, signal.referenceRssiAt1m)
+    val distance = estimateDistance(signal.receivedRssi, signal.referenceRssiAt1m)
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (signal.source == ScanSource.WIFI) HiddenWifiLabel(signal.hidden, signal.everHidden)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             val symbol = when {
-                signal.source == ScanSource.WIFI -> RfSymbol.WIFI
+                signal.source == ScanSource.WIFI || signal.source == ScanSource.P2P -> RfSymbol.WIFI
                 audio?.kind == AudioKind.EARPHONES -> RfSymbol.EARPHONES
                 audio?.kind == AudioKind.HEADPHONES -> RfSymbol.HEADPHONES
                 wearable != null -> wearable.kind.symbol()
@@ -59,17 +60,28 @@ internal fun SignalSummary(signal: SnapshotSignal) {
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             SummaryField("모델 후보", audio?.model ?: wearable?.model ?: signal.modelHint ?: "미확인", Modifier.weight(1f), RfSymbol.MODEL)
-            SummaryField("예상 거리 · 마지막 수신", distance?.let { it.label + if (it.assumedReference) " · 미보정" else " · 추정" } ?: "추정 불가", Modifier.weight(1f), RfSymbol.DISTANCE)
+            if (signal.source == ScanSource.P2P) SummaryField("관측 방식", "시스템 목록 · 캐시 가능", Modifier.weight(1f), RfSymbol.INFO)
+            else SummaryField("예상 거리 · 마지막 수신", distance?.let { it.label + if (it.assumedReference) " · 미보정" else " · 추정" } ?: "추정 불가", Modifier.weight(1f), RfSymbol.DISTANCE)
         }
         HorizontalDivider(color = RfColors.grid)
-        SummaryField("관측 시간", observationSpan(signal.firstSeenMs, signal.lastSeenMs, signal.observationCount), symbol = RfSymbol.CLOCK)
+        SummaryField("관측 시간", signal.source.observationSummary(signal.firstSeenMs, signal.lastSeenMs, signal.observationCount), symbol = RfSymbol.CLOCK)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             RfGlyph(RfSymbol.RETURN, color = if (signal.reappearanceCount > 0) RfColors.warning else RfColors.textDim)
-            Text(if (signal.periods.isEmpty()) "구간 이력 없음 · 이전 버전 기록" else "${signal.periods.size}개 관측 구간 · 재등장 ${signal.reappearanceCount}회", color = if (signal.reappearanceCount > 0) RfColors.warning else RfColors.textDim, style = MaterialTheme.typography.labelSmall)
+            Text(if (signal.source == ScanSource.P2P) "OS 목록 정보 · 재등장 판단 안 함" else if (signal.periods.isEmpty()) "구간 이력 없음 · 이전 버전 기록" else "${signal.periods.size}개 관측 구간 · 재등장 ${signal.reappearanceCount}회", color = if (signal.reappearanceCount > 0) RfColors.warning else RfColors.textDim, style = MaterialTheme.typography.labelSmall)
         }
         val endFormat = if (snapshotTime(signal.firstSeenMs).take(5) == snapshotTime(signal.lastSeenMs).take(5)) "HH:mm:ss" else "MM/dd HH:mm:ss"
-        Text("${snapshotTime(signal.firstSeenMs)} → ${SimpleDateFormat(endFormat, Locale.getDefault()).format(Date(signal.lastSeenMs))}",
+        Text(if (signal.source == ScanSource.P2P) "목록 첫 확인 · ${snapshotTime(signal.firstSeenMs)}" else "${snapshotTime(signal.firstSeenMs)} → ${SimpleDateFormat(endFormat, Locale.getDefault()).format(Date(signal.lastSeenMs))}",
             color = RfColors.textDim, style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+@Composable
+internal fun HiddenWifiLabel(hidden: Boolean, hasHiddenHistory: Boolean) {
+    if (!hidden && !hasHiddenHistory) return
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        RfGlyph(RfSymbol.HIDDEN, size = 18.dp, color = RfColors.warning)
+        Text(if (hidden) "숨김 SSID · 마지막 수신에 이름 미표시" else "이전에 SSID 미표시 · 기록 유지",
+            color = RfColors.warning, style = MaterialTheme.typography.labelSmall)
     }
 }
 
@@ -95,6 +107,10 @@ internal fun ExplanationToggle(title: String, expanded: Boolean, onClick: () -> 
 
 @Composable
 internal fun ObservationPeriodList(signal: SnapshotSignal) {
+    if (signal.source == ScanSource.P2P) {
+        Text(signal.source.observationNote(), style = MaterialTheme.typography.bodySmall)
+        return
+    }
     if (signal.periods.isEmpty()) Text("이 기록에는 구간 이력이 없습니다. 이전 버전 자료의 재등장 여부는 판단하지 않습니다.")
     signal.periods.forEachIndexed { index, period ->
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -110,5 +126,5 @@ internal fun ObservationPeriodList(signal: SnapshotSignal) {
             }
         }
     }
-    Text("BLE는 15초, Wi-Fi는 90초를 넘겨 미수신한 뒤 다시 잡히면 새 구간입니다. 같은 주소의 재포착이며 전원·연결 상태를 뜻하지 않습니다.", style = MaterialTheme.typography.bodySmall, color = RfColors.textDim)
+    Text("BLE는 15초, Wi-Fi AP는 90초, 일반 Bluetooth는 180초를 넘겨 미관측한 뒤 다시 잡히면 새 구간입니다. 같은 주소의 재포착이며 전원·연결 상태를 뜻하지 않습니다.", style = MaterialTheme.typography.bodySmall, color = RfColors.textDim)
 }

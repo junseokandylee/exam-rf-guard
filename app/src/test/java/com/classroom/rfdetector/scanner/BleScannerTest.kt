@@ -1,8 +1,11 @@
 package com.classroom.rfdetector.scanner
 
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanRecord
 import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.SystemClock
 import com.classroom.rfdetector.core.DeviceTracker
@@ -23,7 +26,11 @@ import java.time.Duration
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class BleScannerTest {
-    @Before fun clockHasStarted() { ShadowSystemClock.advanceBy(Duration.ofSeconds(1)) }
+    @Before fun clockHasStarted() {
+        ShadowSystemClock.advanceBy(Duration.ofSeconds(1))
+        val adapter = (RuntimeEnvironment.getApplication().getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        shadowOf(adapter).setIsLeExtendedAdvertisingSupported(false)
+    }
 
     @Test fun advertisementPreservesCompanyAndNameWithoutTreatingRadiatedPowerAsCalibration() {
         val context = RuntimeEnvironment.getApplication()
@@ -160,6 +167,85 @@ class BleScannerTest {
         assertEquals(2, observations.size)
         assertTrue(System.currentTimeMillis() - observations.last().timestampMs in 20_000..20_500)
         assertEquals(latestTime, scanner.lastReceivedAtMs)
+        scanner.stop()
+    }
+
+    @Test fun supportedExtendedScanRequestsAllSupportedPhysAndPreservesAdvertisementMetadata() {
+        val context = RuntimeEnvironment.getApplication()
+        val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        shadowOf(adapter).setEnabled(true)
+        shadowOf(adapter).setIsLeExtendedAdvertisingSupported(true)
+        val scanner = BleScanner(context)
+        val observations = mutableListOf<RfObservation>()
+        assertTrue(scanner.start { observations.add(it) })
+        assertTrue(scanner.usesExtendedAdvertisements)
+        assertNull(scanner.scanModeNotice)
+        val scan = shadowOf(adapter.bluetoothLeScanner).activeScans.single()
+        assertFalse(scan.scanSettings()!!.legacy)
+        assertEquals(ScanSettings.PHY_LE_ALL_SUPPORTED, scan.scanSettings()!!.phy)
+        val bytes = byteArrayOf(3, 3, 15, 24, 2, 10, 0, 0) // Advertised Battery Service and uncalibrated Tx power.
+        val record = ReflectionHelpers.callStaticMethod<ScanRecord>(ScanRecord::class.java, "parseFromBytes", ClassParameter.from(ByteArray::class.java, bytes))
+        val result = ScanResult(adapter.getRemoteDevice("00:11:22:33:44:55"), 1,
+            BluetoothDevice.PHY_LE_CODED, BluetoothDevice.PHY_LE_2M, 1, 0, -70, 0, record, SystemClock.elapsedRealtimeNanos())
+        scan.scanCallback()!!.onScanResult(1, result)
+        val observation = observations.single()
+        val metadata = observation.radioMetadata!!.ble!!
+        assertEquals(listOf("0000180f-0000-1000-8000-00805f9b34fb"), metadata.serviceUuids)
+        assertEquals(true, metadata.connectable)
+        assertEquals(false, metadata.legacy)
+        assertEquals(BluetoothDevice.PHY_LE_CODED, metadata.primaryPhy)
+        assertEquals(BluetoothDevice.PHY_LE_2M, metadata.secondaryPhy)
+        assertNull(observation.txPower)
+        scanner.stop()
+        assertFalse(scanner.usesExtendedAdvertisements)
+    }
+
+    @Test fun unsupportedExtendedHardwareUsesLegacySettingsWithVisibleReason() {
+        val context = RuntimeEnvironment.getApplication()
+        val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        shadowOf(adapter).setEnabled(true)
+        val scanner = BleScanner(context)
+        assertTrue(scanner.start {})
+        assertFalse(scanner.usesExtendedAdvertisements)
+        assertTrue(scanner.scanModeNotice!!.contains("미지원"))
+        assertTrue(shadowOf(adapter.bluetoothLeScanner).activeScans.single().scanSettings()!!.legacy)
+        assertNull(scanner.lastError)
+        scanner.stop()
+    }
+
+    @Test fun extendedFailureRetriesLegacyOnceAndIgnoresOldCallbacksWithoutHidingFallback() {
+        val context = RuntimeEnvironment.getApplication()
+        val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        shadowOf(adapter).setEnabled(true)
+        shadowOf(adapter).setIsLeExtendedAdvertisingSupported(true)
+        val scanner = BleScanner(context)
+        val observations = mutableListOf<RfObservation>()
+        assertTrue(scanner.start { observations.add(it) })
+        val oldCallback = shadowOf(adapter.bluetoothLeScanner).scanCallbacks.single()
+        oldCallback.onScanFailed(ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED)
+        assertTrue(scanner.active)
+        assertFalse(scanner.usesExtendedAdvertisements)
+        assertNull(scanner.lastError)
+        assertTrue(scanner.scanModeNotice!!.contains("실패 (4)"))
+        assertTrue(scanner.scanModeNotice!!.contains("기본 BLE 광고"))
+        val fallback = shadowOf(adapter.bluetoothLeScanner).activeScans.single()
+        assertTrue(fallback.scanSettings()!!.legacy)
+        assertNotSame(oldCallback, fallback.scanCallback())
+        val packet = ScanResult(adapter.getRemoteDevice("00:11:22:33:44:55"), null, -60, SystemClock.elapsedRealtimeNanos())
+        oldCallback.onScanResult(1, packet)
+        oldCallback.onScanFailed(3)
+        assertTrue(observations.isEmpty())
+        fallback.scanCallback()!!.onScanResult(1, packet)
+        assertEquals(1, observations.size)
+        assertTrue(scanner.scanModeNotice!!.contains("실패"))
+        fallback.scanCallback()!!.onScanFailed(2)
+        assertFalse(scanner.active)
+        assertTrue(scanner.lastError!!.contains("(2)"))
+        assertTrue(shadowOf(adapter.bluetoothLeScanner).scanCallbacks.isEmpty())
+        assertTrue(scanner.start { observations.add(it) })
+        assertTrue(scanner.usesExtendedAdvertisements)
+        assertNull(scanner.scanModeNotice)
+        assertNull(scanner.lastError)
         scanner.stop()
     }
 }

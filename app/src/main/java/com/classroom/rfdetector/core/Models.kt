@@ -1,7 +1,10 @@
 package com.classroom.rfdetector.core
 
 /** 관측 출처 */
-enum class ScanSource { BLE, WIFI, P2P, SIM }
+enum class ScanSource(val label: String) {
+    BLE("BLE"), WIFI("Wi-Fi AP"), P2P("Wi-Fi Direct"), SIM("연습"), CLASSIC("Bluetooth Classic");
+    val isBluetooth: Boolean get() = this == BLE || this == CLASSIC
+}
 
 fun radioKey(source: ScanSource, address: String): String = "${source.name}:${address.uppercase(java.util.Locale.ROOT)}"
 
@@ -32,6 +35,8 @@ data class RfObservation(
     val hidden: Boolean,      // Wi-Fi SSID 숨김 AP
     val timestampMs: Long,
     val manufacturerIds: Set<Int> = emptySet(),
+    val frequencyMhz: Int? = null, // Wi-Fi AP's observed primary frequency; absent for BLE.
+    val radioMetadata: RadioMetadata? = null,
 ) {
     val trackingKey: String get() = radioKey(source, key)
 }
@@ -63,6 +68,9 @@ data class TrackedDevice(
     val peakRssi: Int? = null,
     val periods: List<ObservationPeriod> = emptyList(),
     val referenceRssiAt1m: Double? = null,
+    val wifiChannels: List<WifiChannelObservation> = emptyList(),
+    val everHidden: Boolean = hidden,
+    val radioMetadata: RadioMetadata? = null,
 ) {
     val trackingKey: String get() = radioKey(source, key)
 }

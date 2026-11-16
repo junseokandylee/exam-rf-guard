@@ -10,6 +10,8 @@ class DeviceTracker {
         val trackingKey: String get() = radioKey(source, key)
         var name: String? = null
         var hidden = false
+        var everHidden = false
+        var radioMetadata: RadioMetadata? = null
         val manufacturerIds = LinkedHashSet<Int>()
         var ema: Double? = null
         var tx: Double? = null
@@ -19,6 +21,7 @@ class DeviceTracker {
         var lastSeen = 0L
         var observationCount = 0
         var peakRssi: Int? = null
+        val wifiChannels = mutableMapOf<Int, WifiChannelObservation>()
     }
 
     private val tracks = ConcurrentHashMap<String, Track>()
@@ -40,8 +43,11 @@ class DeviceTracker {
         val previousPeriodCount = t.periods.size
         t.periods = addToPeriods(t.periods, obs.timestampMs, obs.source.historyGapMs())
         t.manufacturerIds.addAll(obs.manufacturerIds)
+        updateWifiChannel(t, obs)
         if (!late || t.name == null) obs.name?.takeIf { it.isNotBlank() }?.let { t.name = it }
         if (!late) t.hidden = obs.hidden
+        if (!late) t.radioMetadata = obs.radioMetadata?.snapshotCopy()
+        t.everHidden = t.everHidden || obs.hidden
         obs.rssi?.let { r ->
             if (!late) {
                 t.ema = RssiFilter.ema(if (t.periods.size > previousPeriodCount) null else t.ema, r)
@@ -90,6 +96,9 @@ class DeviceTracker {
                 peakRssi = t.peakRssi,
                 periods = t.periods.toList(),
                 referenceRssiAt1m = t.tx,
+                wifiChannels = t.wifiChannels.values.sortedBy { it.frequencyMhz },
+                everHidden = t.everHidden,
+                radioMetadata = t.radioMetadata?.snapshotCopy(),
             )
         }.sortedWith(
             compareByDescending<TrackedDevice> { it.isBaselineNew }
@@ -101,7 +110,32 @@ class DeviceTracker {
     private fun defaultName(t: Track): String = when {
         t.hidden -> "이름 없는 AP"
         t.source == ScanSource.WIFI -> "Wi-Fi 기기 " + t.key.takeLast(5)
+        t.source == ScanSource.P2P -> "Wi-Fi Direct 목록 " + t.key.takeLast(5)
+        t.source == ScanSource.CLASSIC -> "일반 Bluetooth 기기 " + t.key.takeLast(5)
         else -> "BLE 기기 " + t.key.takeLast(5)
+    }
+
+    private fun updateWifiChannel(track: Track, obs: RfObservation) {
+        if (obs.source != ScanSource.WIFI) return
+        val frequency = obs.frequencyMhz?.takeIf { it > 0 } ?: return
+        val previous = track.wifiChannels[frequency]
+        val lateForFrequency = previous != null && obs.timestampMs < previous.lastSeenMs
+        val name = obs.name?.takeIf { it.isNotBlank() }
+        val fallbackName = if (obs.hidden) "이름 없는 AP" else "Wi-Fi 기기 " + track.key.takeLast(5)
+        track.wifiChannels[frequency] = WifiChannelObservation(
+            address = track.key,
+            name = if (lateForFrequency) previous!!.name else name ?: previous?.name ?: fallbackName,
+            frequencyMhz = frequency,
+            firstSeenMs = minOf(previous?.firstSeenMs ?: obs.timestampMs, obs.timestampMs),
+            lastSeenMs = maxOf(previous?.lastSeenMs ?: obs.timestampMs, obs.timestampMs),
+            observationCount = (previous?.observationCount ?: 0) + 1,
+            lastRssi = if (lateForFrequency) previous!!.lastRssi else obs.rssi,
+            peakRssi = listOfNotNull(previous?.peakRssi, obs.rssi).maxOrNull(),
+            periods = addToPeriods(previous?.periods ?: emptyList(), obs.timestampMs, ScanSource.WIFI.historyGapMs()),
+            hidden = if (lateForFrequency) previous!!.hidden else obs.hidden,
+            everHidden = previous?.everHidden == true || obs.hidden,
+            wifiMetadata = if (lateForFrequency) previous!!.wifiMetadata else obs.radioMetadata?.wifi,
+        )
     }
 
     @Synchronized
@@ -122,5 +156,6 @@ class DeviceTracker {
     }
 
     fun size(): Int = tracks.size
+    fun contains(trackingKey: String): Boolean = tracks.containsKey(trackingKey)
 }
 

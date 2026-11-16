@@ -15,6 +15,9 @@ data class SnapshotSignal(
     val manufacturerIds: Set<Int> = emptySet(),
     val periods: List<ObservationPeriod> = emptyList(),
     val referenceRssiAt1m: Double? = null,
+    val hidden: Boolean = false,
+    val everHidden: Boolean = hidden,
+    val radioMetadata: RadioMetadata? = null,
 ) {
     val matchKey: String get() = radioKey(source, address)
     val reappearanceCount: Int get() = (periods.size - 1).coerceAtLeast(0)
@@ -28,6 +31,12 @@ data class SignalSnapshot(
     val scanStartedAtMs: Long,
     val simulation: Boolean,
     val signals: List<SnapshotSignal>,
+    /** null means a legacy record without channel data; an empty list means none were observed. */
+    val wifiChannels: List<WifiChannelObservation>? = null,
+    /** Modem environment only; never part of signals or participant-device comparisons. */
+    val cellEnvironment: CellEnvironmentSnapshot? = null,
+    /** Requested discovery scope; null in old archives means unknown, not all sources. */
+    val discoverySources: Set<ScanSource>? = null,
 ) {
     companion object {
         fun capture(id: String, area: String, label: String, capturedAtMs: Long, scanStartedAtMs: Long, simulation: Boolean, devices: List<TrackedDevice>, includeNewHistorySinceMs: Long? = null, includeAllHistory: Boolean = false): SignalSnapshot {
@@ -37,15 +46,28 @@ data class SignalSnapshot(
             }.map { device ->
                     SnapshotSignal(device.key, device.source, device.displayName, device.rssiEma, device.firstSeenMs, device.lastSeenMs,
                         device.observationCount, device.identity.summary, device.identity.modelHint, device.presence, device.manufacturerIds.toSet(),
-                        device.periods.toList(), device.referenceRssiAt1m)
+                        device.periods.toList(), device.referenceRssiAt1m, hidden = device.hidden, everHidden = device.everHidden,
+                        radioMetadata = device.radioMetadata?.snapshotCopy())
             }
-            return SignalSnapshot(id, area.trim(), label.trim(), capturedAtMs, scanStartedAtMs, simulation, signals)
+            // Channel history is independent of the visible/current AP list and the signal baseline filter.
+            val channels = devices.filter { it.source == ScanSource.WIFI }.flatMap { device ->
+                device.wifiChannels.map { it.copy(periods = it.periods.toList()) }
+            }.sortedWith(compareBy<WifiChannelObservation> { it.frequencyMhz }.thenBy { it.matchKey })
+            return SignalSnapshot(id, area.trim(), label.trim(), capturedAtMs, scanStartedAtMs, simulation, signals, channels)
         }
     }
 }
 
+fun discoveryScopeNote(before: SignalSnapshot, after: SignalSnapshot): String? {
+    val previous = before.discoverySources
+    val current = after.discoverySources
+    if (previous == null || current == null) return "탐색 범위 기록이 없는 자료가 포함돼 있습니다. 같은 종류를 탐색했는지 확인하세요."
+    val added = current - previous
+    return added.takeIf { it.isNotEmpty() }?.joinToString(prefix = "탐색 범위 확대 · ", postfix = "는 기준 때 탐색하지 않았습니다. 추가 주소가 입실 후 생겼다는 뜻은 아닙니다.") { it.label }
+}
+
 data class SignalChange(val before: SnapshotSignal, val after: SnapshotSignal) {
-    val deltaDb: Double? get() = before.rssi?.let { old -> after.rssi?.minus(old) }
+    val deltaDb: Double? get() = before.receivedRssi?.let { old -> after.receivedRssi?.minus(old) }
 }
 
 data class SnapshotComparison(

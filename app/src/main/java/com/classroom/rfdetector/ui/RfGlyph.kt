@@ -17,7 +17,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 internal enum class RfSymbol(val label: String) {
-    BLUETOOTH("Bluetooth"), WIFI("Wi-Fi"), EARPHONES("이어폰"), HEADPHONES("헤드폰"),
+    BLUETOOTH("Bluetooth"), WIFI("Wi-Fi"), HIDDEN("SSID 미표시"), EARPHONES("이어폰"), HEADPHONES("헤드폰"),
     GLASSES("스마트 안경"), WATCH("스마트워치"), CAMERA("카메라"),
     CLOCK("관측 시간"), RETURN("재등장"), UNION("합집합"), DISTANCE("예상 거리"),
     COMPANY("제조사"), MODEL("모델"), INFO("자세한 설명"), SNAPSHOT("스냅샷 저장"), CHECK("완료")
@@ -37,6 +37,7 @@ internal fun RfGlyph(symbol: RfSymbol, size: Dp = 20.dp, color: Color = RfColors
             when (symbol) {
                 RfSymbol.BLUETOOTH -> { path(7f to 7f, 17f to 16f, 12f to 21f, 12f to 3f, 17f to 8f, 7f to 17f) }
                 RfSymbol.WIFI -> { drawArc(color, 222f, 96f, false, Offset(2f, 4f), Size(20f, 20f), style = Stroke(1.8f)); drawArc(color, 222f, 96f, false, Offset(6f, 9f), Size(12f, 12f), style = Stroke(1.8f)); drawCircle(color, 1.5f, Offset(12f, 19f)) }
+                RfSymbol.HIDDEN -> { path(2f to 12f, 6f to 7f, 12f to 5f, 18f to 7f, 22f to 12f, 18f to 17f, 12f to 19f, 6f to 17f, 2f to 12f); drawCircle(color, 3f, Offset(12f, 12f), style = Stroke(1.8f)); line(3f, 3f, 21f, 21f) }
                 RfSymbol.EARPHONES -> { drawCircle(color, 3f, Offset(6f, 7f), style = Stroke(1.8f)); drawCircle(color, 3f, Offset(18f, 7f), style = Stroke(1.8f)); line(8f, 9f, 8f, 20f); line(16f, 9f, 16f, 20f) }
                 RfSymbol.HEADPHONES -> { drawArc(color, 180f, 180f, false, Offset(3f, 3f), Size(18f, 18f), style = Stroke(1.8f)); line(3f, 12f, 3f, 20f); line(21f, 12f, 21f, 20f); line(6f, 13f, 6f, 20f); line(18f, 13f, 18f, 20f) }
                 RfSymbol.GLASSES -> { drawCircle(color, 4f, Offset(6f, 14f), style = Stroke(1.8f)); drawCircle(color, 4f, Offset(18f, 14f), style = Stroke(1.8f)); line(10f, 13f, 14f, 13f); path(2f to 12f, 4f to 5f, 7f to 5f); path(22f to 12f, 20f to 5f, 17f to 5f) }

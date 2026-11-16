@@ -84,12 +84,14 @@ private fun AppContent() {
     val devices by vm.devices.collectAsState()
     val scanning by vm.scanning.collectAsState()
     val simMode by vm.simMode.collectAsState()
+    val expandedDiscovery by vm.expandedDiscovery.collectAsState()
     val geigerOn by vm.geigerOn.collectAsState()
     val baselineSet by vm.baselineSet.collectAsState()
     val newCount by vm.newCount.collectAsState()
     val status by vm.statusMsg.collectAsState()
     val heading by vm.headingDeg.collectAsState()
     val latestNewSignal by vm.latestNewSignal.collectAsState()
+    val latestNewWifiChannel by vm.latestNewWifiChannel.collectAsState()
     DisposableEffect(scanning) {
         val window = (context as? Activity)?.window
         if (scanning) window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -111,7 +113,12 @@ private fun AppContent() {
                 FilterChip(selected = !simMode, onClick = { vm.setSim(false) }, label = { Text("실제 탐색") })
                 FilterChip(selected = simMode, onClick = { vm.setSim(true) }, label = { Text("연습 모드") })
                 Spacer(Modifier.weight(1f))
-                if (!compact) Text(if (simMode) "가상 데이터" else "BLE + Wi-Fi", color = RfColors.textDim, style = MaterialTheme.typography.labelSmall)
+                if (!compact) Text(when {
+                    simMode && expandedDiscovery -> "가상 · 확장"
+                    simMode -> "가상 데이터"
+                    expandedDiscovery -> "범위 확장"
+                    else -> "BLE + Wi-Fi"
+                }, color = RfColors.textDim, style = MaterialTheme.typography.labelSmall)
             }
             val tabOrder = listOf(2, 1, 4, 0, 3)
             TabRow(selectedTabIndex = tabOrder.indexOf(tab), containerColor = Color.Transparent, divider = {}) {
@@ -123,20 +130,27 @@ private fun AppContent() {
                     }
                 }
             }
-            latestNewSignal?.let { name ->
+            if (latestNewWifiChannel != null) {
                 Surface(color = RfColors.surfaceAlt) {
                     Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("새 신호 포착 · $name", Modifier.weight(1f), color = RfColors.warning, style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                        Text("기준에 없던 채널 · $latestNewWifiChannel", Modifier.weight(1f), color = RfColors.warning, style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                        TextButton(onClick = { tab = 3; vm.comparisonSnapshot.value = null; vm.latestNewWifiChannel.value = null }) { Text("채널 확인") }
+                    }
+                }
+            } else latestNewSignal?.let { name ->
+                Surface(color = RfColors.surfaceAlt) {
+                    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(name, Modifier.weight(1f), color = RfColors.warning, style = MaterialTheme.typography.bodySmall, maxLines = 2)
                         TextButton(onClick = { tab = 2; vm.comparisonSnapshot.value = null; vm.latestNewSignal.value = null }) { Text("추가 확인") }
                     }
                 }
             }
             Box(Modifier.weight(1f)) {
                 screenStates.SaveableStateProvider(tab) { when (tab) {
-                    0 -> RadarScreen(vm, devices.filter { it.presence == SignalPresence.RECENT }, heading)
+                    0 -> RadarScreen(vm, devices.filter { it.presence == SignalPresence.RECENT && it.source != com.classroom.rfdetector.core.ScanSource.P2P }, heading)
                     1 -> DeviceListScreen(vm, devices, baselineSet, newCount)
-                    2 -> SnapshotScreen(vm)
-                    3 -> ChannelScreen(vm)
+                    2 -> SnapshotScreen(vm, onOpenChannels = { tab = 3 })
+                    3 -> ChannelScreen(vm, onOpenComparison = { tab = 2 })
                     else -> ScanStatusScreen(vm, onCompare = { tab = 2 }, onDevices = { tab = 1 })
                 } }
             }

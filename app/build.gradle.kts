@@ -12,8 +12,8 @@ android {
         applicationId = "com.classroom.rfdetector"
         minSdk = 29
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2.0-preview.1"
+        versionCode = 4
+        versionName = "1.3.0-preview.1"
     }
 
     compileOptions {

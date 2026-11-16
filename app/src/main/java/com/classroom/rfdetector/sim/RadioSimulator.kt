@@ -48,7 +48,7 @@ class RadioSimulator {
     }
 
     fun addDevice() {
-        val index = devices.count { it.key.startsWith("sim-extra-") } + 1
+        val index = devices.count { it.source == ScanSource.BLE && it.key.startsWith("sim-extra-") } + 1
         devices.add(VDev("sim-extra-$index", "AirPods Pro · 추가 가상 $index", ScanSource.BLE, false, userX + 1.0, userY + 1.0))
     }
 
@@ -83,9 +83,10 @@ class RadioSimulator {
                 txPower = null,
                 hidden = d.hidden,
                 timestampMs = now,
+                frequencyMhz = d.frequencyMhz,
                 manufacturerIds = when {
-                    d.key == "sim-airpods" || d.key.startsWith("sim-extra-") -> setOf(76)
-                    d.key == "sim-buds" -> setOf(117)
+                    d.source == ScanSource.BLE && (d.key == "sim-airpods" || d.key.startsWith("sim-extra-")) -> setOf(76)
+                    d.source == ScanSource.BLE && d.key == "sim-buds" -> setOf(117)
                     else -> emptySet()
                 },
             )

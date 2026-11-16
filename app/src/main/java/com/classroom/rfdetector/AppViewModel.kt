@@ -18,8 +18,19 @@ import com.classroom.rfdetector.core.SignalSnapshot
 import com.classroom.rfdetector.core.SnapshotStore
 import com.classroom.rfdetector.core.ObservationUpdate
 import com.classroom.rfdetector.core.ScanSession
+import com.classroom.rfdetector.core.ScanSource
+import com.classroom.rfdetector.core.CellEnvironmentSnapshot
+import com.classroom.rfdetector.core.CellEnvironmentReading
+import com.classroom.rfdetector.scanner.CellEnvironmentScanner
+import com.classroom.rfdetector.core.analyzeWifiChannels
+import com.classroom.rfdetector.core.wifiChannelLabel
+import com.classroom.rfdetector.core.wifiChannelNumber
 import com.classroom.rfdetector.scanner.BleScanner
 import com.classroom.rfdetector.scanner.WifiScanner
+import com.classroom.rfdetector.scanner.ClassicBluetoothScanner
+import com.classroom.rfdetector.scanner.WifiDirectScanner
+import com.classroom.rfdetector.scanner.BluetoothSweepCoordinator
+import com.classroom.rfdetector.scanner.BluetoothSweepPhase
 import com.classroom.rfdetector.sim.RadioSimulator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +40,11 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -56,7 +72,20 @@ class AppViewModel(private val app: Context) : ViewModel() {
     val geiger = GeigerController(app)
     val ble = BleScanner(app)
     val wifi = WifiScanner(app, scope)
+    val classic = ClassicBluetoothScanner(app)
+    val wifiDirect = WifiDirectScanner(app, scope)
+    val cellEnvironment = CellEnvironmentScanner(app, scope)
+    private val _cellEnvironmentState = MutableStateFlow<CellEnvironmentSnapshot?>(null)
+    val cellEnvironmentState: StateFlow<CellEnvironmentSnapshot?> = _cellEnvironmentState
+    private val sessionSources = mutableSetOf<ScanSource>()
     val sim = RadioSimulator()
+    val expandedDiscovery = MutableStateFlow(false)
+    val bluetoothPhase = MutableStateFlow(BluetoothSweepPhase.STOPPED)
+    private val bluetoothSweep = BluetoothSweepCoordinator(scope,
+        startBle = { ble.start(::onObservation) }, stopBle = ble::stop,
+        startClassic = { completed -> classic.start(::onObservation, completed) }, stopClassic = classic::stop,
+        isClassicDiscoveryIdle = classic::isDiscoveryIdle,
+        onPhase = { bluetoothPhase.value = it })
 
     private val _devices = MutableStateFlow<List<TrackedDevice>>(emptyList())
     val devices: StateFlow<List<TrackedDevice>> = _devices
@@ -68,13 +97,14 @@ class AppViewModel(private val app: Context) : ViewModel() {
     val newCount = MutableStateFlow(0)
     val headingDeg = MutableStateFlow(0.0)
     val statusMsg = MutableStateFlow<String?>(null)
-    val wifiStats = MutableStateFlow<List<ApRow>>(emptyList())
     val savedSnapshots = MutableStateFlow<List<SignalSnapshot>>(emptyList())
     val baselineSnapshot = MutableStateFlow<SignalSnapshot?>(null)
     val comparisonSnapshot = MutableStateFlow<SignalSnapshot?>(null)
     val snapshotBusy = MutableStateFlow(true)
     val snapshotError = MutableStateFlow<String?>(null)
     val latestNewSignal = MutableStateFlow<String?>(null)
+    val latestNewWifiChannel = MutableStateFlow<String?>(null)
+    private val announcedWifiFrequencies = mutableSetOf<Int>()
     val areaDraft = MutableStateFlow("시험실")
     val scanSession = MutableStateFlow<ScanSession?>(null)
     private val snapshotStore = SnapshotStore(app.filesDir)
@@ -87,13 +117,21 @@ class AppViewModel(private val app: Context) : ViewModel() {
     private var checkpointJob: Job? = null
     val healthTick = MutableStateFlow(0L)
 
-    data class ApRow(
-        val ssid: String?,
-        val bssid: String,
-        val rssi: Int,
-        val freq: Int,
-        val hidden: Boolean,
-    )
+    private val liveWifiChannels = devices.map { records ->
+        records.filter { it.source == ScanSource.WIFI }.flatMap { it.wifiChannels }
+    }.distinctUntilChanged()
+    private val liveWifiSnapshot = combine(liveWifiChannels, scanSession, simMode,
+        healthTick, areaDraft) { channels, session, simulation, tick, area ->
+        val capturedAt = maxOf(tick, channels.maxOfOrNull { it.lastSeenMs } ?: 0, session?.startedAtMs ?: 0)
+        SignalSnapshot("live-wifi", session?.area ?: area, "현재 채널 관측", capturedAt,
+            session?.startedAtMs ?: capturedAt, simulation, emptyList(), wifiChannels = if (session == null) null else channels)
+    }
+    private val wifiArchive = combine(savedSnapshots, checkpoints) { manual, automatic -> manual + automatic }
+    private val wifiComparisonTarget = combine(comparisonSnapshot, liveWifiSnapshot) { saved, live -> saved ?: live }.distinctUntilChanged()
+    val wifiChannelAnalysis = combine(baselineSnapshot, wifiComparisonTarget, wifiArchive) { baseline, target, archive ->
+        analyzeWifiChannels(baseline, target, archive)
+    }.stateIn(scope, SharingStarted.WhileSubscribed(5_000),
+        analyzeWifiChannels(null, SignalSnapshot("live-wifi", "시험실", "현재 채널 관측", 0, 0, false, emptyList())))
 
     private var simJob: Job? = null
     private var refreshJob: Job? = null
@@ -136,7 +174,9 @@ class AppViewModel(private val app: Context) : ViewModel() {
             if (!simMode.value && scanning.value) engine.rotateAll(d)
         }
         wifi.onError = { msg -> statusMsg.value = msg }
+        wifiDirect.onError = { msg -> statusMsg.value = msg }
         ble.onError = { msg -> statusMsg.value = msg }
+        classic.onError = { msg -> statusMsg.value = msg }
     }
 
     /** API 레벨별로 런타임 요청이 필요한 권한 목록 */
@@ -164,18 +204,22 @@ class AppViewModel(private val app: Context) : ViewModel() {
         engine.clear()
         geiger.setClass(DistanceClass.UNKNOWN)
         _devices.value = emptyList()
-        wifiStats.value = emptyList()
+        _cellEnvironmentState.value = null
+        sessionSources.clear()
+        sessionSources.addAll(requestedSources())
         newCount.value = 0
         statusMsg.value = null
         scanSession.value = ScanSession(java.util.UUID.randomUUID().toString(), System.currentTimeMillis(), areaDraft.value.trim().ifBlank { "시험실" })
         applyBaselineToSession()
         latestNewSignal.value = null
+        latestNewWifiChannel.value = null
+        announcedWifiFrequencies.clear()
         scanning.value = true
         if (simMode.value) {
             sim.reset()
             simJob = scope.launch {
                 while (isActive) {
-                    sim.tick().forEach { onObservation(it) }
+                    sim.tick().filter { expandedDiscovery.value || it.source != ScanSource.CLASSIC }.forEach { onObservation(it) }
                     delay(250)
                 }
             }
@@ -183,13 +227,16 @@ class AppViewModel(private val app: Context) : ViewModel() {
         } else {
             if (!ble.isUsable()) {
                 statusMsg.value = "블루투스 꺼짐/없음 — BLE 스캔 생략"
-            } else if (!ble.start(::onObservation)) {
-                statusMsg.value = "BLE 스캔 시작 실패(권한 확인)"
             }
+            bluetoothSweep.start(expandedDiscovery.value)
             if (locationServicesOff()) {
                 statusMsg.value = "위치 서비스가 꺼져 있어 Wi-Fi 결과가 안 보일 수 있음"
             }
             wifi.start(::onObservation)
+            if (expandedDiscovery.value) {
+                wifiDirect.start(::onObservation)
+                cellEnvironment.start()
+            }
         }
         motion.start()
         refreshJob = scope.launch {
@@ -208,14 +255,30 @@ class AppViewModel(private val app: Context) : ViewModel() {
 
     private fun onObservation(obs: RfObservation) {
         if (!scanning.value) return
+        // Restarting optional discovery must not turn the same OS cache entry into RF reappearances.
+        if (obs.source == ScanSource.P2P && tracker.contains(obs.trackingKey)) return
         val update = tracker.update(obs)
+        announceWifiChannel(obs)
         if ((update == ObservationUpdate.FIRST_SEEN || update == ObservationUpdate.REAPPEARED) && baselineSet.value) {
-            if (obs.trackingKey !in (tracker.baselineKeys ?: emptySet())) latestNewSignal.value = (obs.name ?: obs.key) + if (update == ObservationUpdate.REAPPEARED) " · 재등장" else ""
+            if (obs.trackingKey !in (tracker.baselineKeys ?: emptySet())) {
+                val label = if (obs.source == ScanSource.WIFI && obs.hidden) "숨김 SSID · ${obs.key}" else obs.name ?: obs.key
+                val kind = if (obs.source == ScanSource.P2P) "Wi-Fi Direct 목록 추가" else "새 신호 포착"
+                latestNewSignal.value = "$kind · $label" + if (update == ObservationUpdate.REAPPEARED) " · 재등장" else ""
+            }
         }
         if (update != ObservationUpdate.LATE) obs.rssi?.let { r ->
             val tx = obs.txPower?.toDouble() ?: RssiFilter.DEFAULT_TX_DBM
             engine.deviceFilter(obs.trackingKey).observeRssi(r.toDouble(), tx)
         }
+    }
+
+    private fun announceWifiChannel(observation: RfObservation) {
+        if (observation.source != ScanSource.WIFI || !baselineSet.value) return
+        val baseline = baselineSnapshot.value ?: return
+        val frequencies = baseline.wifiChannels?.map { it.frequencyMhz }?.toSet() ?: return
+        val frequency = observation.frequencyMhz ?: return
+        if (observation.timestampMs <= baseline.capturedAtMs || wifiChannelNumber(frequency) == null || frequency in frequencies) return
+        if (announcedWifiFrequencies.add(frequency)) latestNewWifiChannel.value = wifiChannelLabel(frequency) + if (observation.hidden) " · 숨김 SSID" else ""
     }
 
     fun stopScan() {
@@ -226,8 +289,10 @@ class AppViewModel(private val app: Context) : ViewModel() {
         checkpointJob?.cancel(); checkpointJob = null
         simJob?.cancel(); simJob = null
         refreshJob?.cancel(); refreshJob = null
-        ble.stop()
+        bluetoothSweep.stop()
         wifi.stop()
+        wifiDirect.stop()
+        cellEnvironment.stop()
         motion.stop()
         if (geigerOn.value) setGeiger(false)
     }
@@ -244,6 +309,8 @@ class AppViewModel(private val app: Context) : ViewModel() {
         scanSession.value = session.copy(area = areaDraft.value.trim())
         applyBaselineToSession()
         latestNewSignal.value = null
+        latestNewWifiChannel.value = null
+        announcedWifiFrequencies.clear()
         refresh()
     }
 
@@ -272,7 +339,7 @@ class AppViewModel(private val app: Context) : ViewModel() {
         val snapshot = SignalSnapshot.capture(java.util.UUID.randomUUID().toString(), area.trim().take(80), label.trim().take(80),
             System.currentTimeMillis(), session.startedAtMs, simMode.value, devices.value,
             includeNewHistorySinceMs = if (asBaseline || !baselineSet.value) null else baselineSnapshot.value?.capturedAtMs,
-            includeAllHistory = asBaseline)
+            includeAllHistory = asBaseline).withDiscoveryContext()
         val updated = listOf(snapshot) + savedSnapshots.value
         snapshotBusy.value = true
         snapshotError.value = null
@@ -304,6 +371,8 @@ class AppViewModel(private val app: Context) : ViewModel() {
         snapshotError.value = if (scanSession.value?.area?.equals(snapshot.area, true) == false)
             "저장 기준은 ${snapshot.area}, 현재 수신 기록은 ${scanSession.value!!.area}입니다. 저장 자료끼리 비교하거나 새 공간에서 탐색을 시작하세요." else null
         latestNewSignal.value = null
+        latestNewWifiChannel.value = null
+        announcedWifiFrequencies.clear()
         refresh()
     }
 
@@ -324,14 +393,44 @@ class AppViewModel(private val app: Context) : ViewModel() {
         tracker.clear()
         engine.clear()
         _devices.value = emptyList()
-        wifiStats.value = emptyList()
         baselineSet.value = false
         baselineSnapshot.value = null
         comparisonSnapshot.value = null
         scanSession.value = null
+        _cellEnvironmentState.value = null
+        sessionSources.clear()
         latestNewSignal.value = null
+        latestNewWifiChannel.value = null
+        announcedWifiFrequencies.clear()
         newCount.value = 0
         statusMsg.value = if (on) "연습 모드 · 가상 기기로 탐색 흐름을 체험하세요" else "실제 탐색 · BLE와 Wi-Fi 신호를 확인합니다"
+    }
+
+    fun setExpandedDiscovery(enabled: Boolean) {
+        if (expandedDiscovery.value == enabled) return
+        expandedDiscovery.value = enabled
+        if (scanning.value) sessionSources.addAll(requestedSources())
+        if (!scanning.value || simMode.value) return
+        bluetoothSweep.start(enabled)
+        if (enabled) {
+            wifiDirect.start(::onObservation)
+            cellEnvironment.start()
+        } else {
+            wifiDirect.stop()
+            cellEnvironment.stop()
+        }
+    }
+
+    fun simAddExtendedDevices() {
+        if (!scanning.value || !simMode.value || !expandedDiscovery.value) return
+        val now = System.currentTimeMillis()
+        _cellEnvironmentState.value = CellEnvironmentSnapshot(now, listOf(
+            CellEnvironmentReading("LTE", "가상 기지국 · 실제 수신 아님", 1650, -85, true, now)),
+            note = "가상 모뎀 환경 · 주변 휴대전화 목록이 아닙니다")
+        if (sim.devices.none { it.key == "sim-extra-classic" }) sim.devices.add(
+            RadioSimulator.VDev("sim-extra-classic", "WH-1000XM5 · 일반 Bluetooth 가상", ScanSource.CLASSIC, false, sim.userX + 2.0, sim.userY))
+        if (tracker.snapshot(System.currentTimeMillis(), true).none { it.key == "sim-extra-p2p" && it.source == ScanSource.P2P }) onObservation(RfObservation("sim-extra-p2p", ScanSource.P2P,
+            "Wi-Fi Direct · 가상 목록", null, null, false, System.currentTimeMillis()))
     }
 
     /** 시뮬레이터 조이스틱: 정면/우측 미터 단위 이동 */
@@ -351,9 +450,19 @@ class AppViewModel(private val app: Context) : ViewModel() {
         if (scanning.value && simMode.value) sim.addDevice()
     }
 
+    fun simAddWifiDevice(hidden: Boolean = false) {
+        if (!scanning.value || !simMode.value) return
+        val index = sim.devices.count { it.key.startsWith("sim-extra-wifi-") } + 1
+        sim.devices.add(RadioSimulator.VDev("sim-extra-wifi-$index", "추가 핫스팟 · 가상 $index", ScanSource.WIFI,
+            hidden, sim.userX + 1.5, sim.userY + 1.5, frequencyMhz = 2462))
+    }
+
     private fun refresh() {
         val now = System.currentTimeMillis()
         healthTick.value = now
+        if (!simMode.value && expandedDiscovery.value) {
+            _cellEnvironmentState.value = cellEnvironment.snapshot(cellEnvironment.lastUpdatedMs ?: scanSession.value?.startedAtMs ?: now)
+        }
         val list = tracker.snapshot(now, includeInactive = true).map { d ->
             val est = if (d.presence == SignalPresence.RECENT) engine.deviceFilter(d.trackingKey).estimate() else null
             if (d.presence == SignalPresence.HISTORY) engine.remove(d.trackingKey)
@@ -372,18 +481,6 @@ class AppViewModel(private val app: Context) : ViewModel() {
                 .minByOrNull { it.distanceM!! }
                 ?.distanceClass ?: DistanceClass.UNKNOWN
         )
-        wifiStats.value = if (simMode.value) list.filter { it.source == com.classroom.rfdetector.core.ScanSource.WIFI }.map { device ->
-            val frequency = sim.devices.first { it.key == device.key }.frequencyMhz!!
-            ApRow(if (device.hidden) null else device.displayName, device.key, device.rssiEma?.toInt() ?: -100, frequency, device.hidden)
-        } else wifi.lastResults.filter { android.os.SystemClock.elapsedRealtime() - it.timestamp / 1000 in 0..90_000 }.map {
-            ApRow(
-                ssid = it.SSID?.takeIf { s -> s.isNotBlank() },
-                bssid = it.BSSID,
-                rssi = it.level,
-                freq = it.frequency,
-                hidden = it.SSID.isNullOrBlank(),
-            )
-        }
     }
 
     fun shutdown() {
@@ -399,7 +496,7 @@ class AppViewModel(private val app: Context) : ViewModel() {
         scanSession.value = session.copy(areaLocked = true)
         val now = System.currentTimeMillis()
         val record = SignalSnapshot.capture("auto-${session.id}", session.area, "자동 보존 · 전체 수신 이력", now,
-            session.startedAtMs, simMode.value, devices.value, includeAllHistory = true)
+            session.startedAtMs, simMode.value, devices.value, includeAllHistory = true).withDiscoveryContext()
         checkpointBusy.value = true
         pendingCheckpoints.incrementAndGet()
         storageScope.launch {
@@ -414,4 +511,12 @@ class AppViewModel(private val app: Context) : ViewModel() {
         }
     }
 
+    private fun requestedSources(): Set<ScanSource> = if (expandedDiscovery.value)
+        setOf(ScanSource.BLE, ScanSource.WIFI, ScanSource.CLASSIC, ScanSource.P2P)
+        else setOf(ScanSource.BLE, ScanSource.WIFI)
+
+    fun SignalSnapshot.withDiscoveryContext(): SignalSnapshot = copy(
+        cellEnvironment = cellEnvironmentState.value,
+        discoverySources = sessionSources.toSet(),
+    )
 }

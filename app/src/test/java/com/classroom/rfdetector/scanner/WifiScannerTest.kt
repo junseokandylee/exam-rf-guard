@@ -53,6 +53,7 @@ class WifiScannerTest {
         val observation = observations.single()
         assertNull(observation.name)
         assertTrue(observation.hidden)
+        assertEquals(2437, observation.frequencyMhz)
         val ageMs = System.currentTimeMillis() - observation.timestampMs
         assertTrue("Cached result must retain its five-second age, was $ageMs ms", ageMs in 5_000..5_500)
     }
@@ -144,6 +145,64 @@ class WifiScannerTest {
         assertFalse(scanner.active)
         scanner.start(onObs = { observations.add(it) })
         assertNull(scanner.lastUpdatedMs)
+    }
+
+    @Test fun channelChangesUseFreshSamplesAndCachedNotificationsCannotAddFalseChannels() {
+        ShadowSystemClock.advanceBy(Duration.ofMinutes(2))
+        val first = result("same-ap", "Room AP").apply { frequency = 2437 }
+        shadowOf(manager).setScanResults(listOf(first))
+        scanner.start(onObs = { observations.add(it) })
+        complete()
+        shadowOf(manager).setScanResults(listOf(result("same-ap", "Room AP").apply {
+            timestamp = first.timestamp; frequency = 5180
+        }))
+        complete()
+        assertEquals(listOf(2437), observations.map { it.frequencyMhz })
+        ShadowSystemClock.advanceBy(Duration.ofSeconds(30))
+        shadowOf(manager).setScanResults(listOf(result("same-ap", "Room AP").apply { frequency = 5180 }))
+        complete()
+        shadowOf(manager).setScanResults(listOf(first))
+        complete()
+        assertEquals(listOf(2437, 5180), observations.map { it.frequencyMhz })
+    }
+
+    @Test fun absentEmptyAndWhitespaceSsidsKeepBssidAndFrequencyAsHiddenObservations() {
+        ShadowSystemClock.advanceBy(Duration.ofMinutes(2))
+        scanner.start(onObs = { observations.add(it) })
+        shadowOf(manager).setScanResults(listOf(
+            result("null-ssid", null),
+            result("empty-ssid", ""),
+            result("blank-ssid", "  "),
+        ))
+        complete()
+        assertEquals(setOf("null-ssid", "empty-ssid", "blank-ssid"), observations.map { it.key }.toSet())
+        assertTrue(observations.all { it.hidden && it.name == null && it.frequencyMhz == 2437 })
+    }
+
+    @Test fun channelWidthSegmentsAndSecurityAdvertisementArePreservedWithoutInventedCenters() {
+        ShadowSystemClock.advanceBy(Duration.ofMinutes(2))
+        scanner.start(onObs = { observations.add(it) })
+        shadowOf(manager).setScanResults(listOf(
+            result("wide", null).apply {
+                frequency = 5180; channelWidth = ScanResult.CHANNEL_WIDTH_80MHZ_PLUS_MHZ
+                centerFreq0 = 5210; centerFreq1 = 5530; capabilities = "[RSN-OWE-CCMP][ESS]"
+            },
+            result("narrow", "AP").apply {
+                channelWidth = ScanResult.CHANNEL_WIDTH_20MHZ
+                centerFreq0 = 2437; centerFreq1 = 5530; capabilities = " "
+            },
+        ))
+        complete()
+        val wide = observations.first().radioMetadata!!.wifi!!
+        assertEquals("80+80 MHz", wide.channelWidthLabel)
+        assertEquals(5210, wide.centerFrequency0Mhz)
+        assertEquals(5530, wide.centerFrequency1Mhz)
+        assertEquals("[RSN-OWE-CCMP][ESS]", wide.capabilities)
+        val narrow = observations.last().radioMetadata!!.wifi!!
+        assertEquals(20, narrow.channelWidthMhz)
+        assertNull(narrow.centerFrequency0Mhz)
+        assertNull(narrow.centerFrequency1Mhz)
+        assertNull(narrow.capabilities)
     }
 }
 

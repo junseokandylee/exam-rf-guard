@@ -2,16 +2,19 @@ package com.classroom.rfdetector.core
 
 import kotlin.math.abs
 
-enum class RadioFilter(val label: String) { ALL("전체 종류"), BLE("BLE"), WIFI("Wi-Fi") }
+enum class RadioFilter(val label: String, val source: ScanSource? = null) {
+    ALL("전체 종류"), BLE("BLE", ScanSource.BLE), WIFI("Wi-Fi", ScanSource.WIFI),
+    CLASSIC("일반 Bluetooth", ScanSource.CLASSIC), P2P("Wi-Fi Direct", ScanSource.P2P)
+}
 enum class SignalSort(val label: String) {
     RSSI("강한 신호순"), LAST_SEEN("최근 관측순"), OBSERVATIONS("수신 횟수순"), CHANGE("변화 큰 순"), NAME("이름순"),
 }
 
 val SnapshotSignal.audioNameMatch: AudioNameMatch?
-    get() = if (source == ScanSource.BLE) AudioNameCatalog.match(name) ?: AudioNameCatalog.match(modelHint) else null
+    get() = if (source.isBluetooth) AudioNameCatalog.match(name) ?: AudioNameCatalog.match(modelHint) else null
 
 val SnapshotSignal.wearableNameMatch: WearableNameMatch?
-    get() = if (source == ScanSource.BLE) WearableNameCatalog.match(name) ?: WearableNameCatalog.match(modelHint) else null
+    get() = if (source.isBluetooth) WearableNameCatalog.match(name) ?: WearableNameCatalog.match(modelHint) else null
 
 fun SnapshotSignal.matchesQuery(query: String): Boolean {
     if (query.isBlank()) return true
@@ -34,7 +37,7 @@ fun filterAndSortSignals(
         SignalSort.NAME -> compareBy<SnapshotSignal> { it.name.lowercase(java.util.Locale.ROOT) }
     }.thenBy { it.matchKey }
     return signals.filter { signal ->
-        (radio == RadioFilter.ALL || (radio == RadioFilter.BLE && signal.source == ScanSource.BLE) || (radio == RadioFilter.WIFI && signal.source == ScanSource.WIFI)) &&
+        (radio.source == null || radio.source == signal.source) &&
             (!audioOnly || signal.audioNameMatch != null) && signal.matchesQuery(query)
     }.sortedWith(comparator)
 }

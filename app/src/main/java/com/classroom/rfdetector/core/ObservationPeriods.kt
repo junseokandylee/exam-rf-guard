@@ -2,12 +2,22 @@ package com.classroom.rfdetector.core
 
 data class ObservationPeriod(val firstSeenMs: Long, val lastSeenMs: Long, val count: Int)
 
-fun ScanSource.historyGapMs(): Long = if (this == ScanSource.WIFI) 90_000L else 15_000L
+fun ScanSource.historyGapMs(): Long = when (this) {
+    ScanSource.WIFI -> 90_000L
+    ScanSource.CLASSIC, ScanSource.P2P -> 180_000L
+    else -> 15_000L
+}
+
+private fun ScanSource.recentWindowMs(): Long = when (this) {
+    ScanSource.WIFI -> 45_000L
+    ScanSource.CLASSIC, ScanSource.P2P -> 90_000L
+    else -> 5_000L
+}
 
 fun signalPresence(source: ScanSource, lastSeenMs: Long, nowMs: Long): SignalPresence {
     val age = (nowMs - lastSeenMs).coerceAtLeast(0)
     return when {
-        age <= if (source == ScanSource.WIFI) 45_000 else 5_000 -> SignalPresence.RECENT
+        age <= source.recentWindowMs() -> SignalPresence.RECENT
         age <= source.historyGapMs() -> SignalPresence.QUIET
         else -> SignalPresence.HISTORY
     }
@@ -36,6 +46,7 @@ fun observedUnion(baseline: SignalSnapshot, target: SignalSnapshot, snapshots: L
         .groupBy { it.first.matchKey }
         .values.map { copies ->
             val latest = copies.maxWith(compareBy<Pair<SnapshotSignal, Long>> { it.first.lastSeenMs }.thenBy { it.second }).first
-            latest.copy(presence = signalPresence(latest.source, latest.lastSeenMs, target.capturedAtMs))
+            latest.copy(presence = signalPresence(latest.source, latest.lastSeenMs, target.capturedAtMs),
+                everHidden = copies.any { it.first.hidden || it.first.everHidden })
         }.sortedBy { it.matchKey }
 }

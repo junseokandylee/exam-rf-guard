@@ -9,6 +9,40 @@ class SignalReportTest {
     private fun snapshot(id: String, at: Long, signals: List<SnapshotSignal> = emptyList(), area: String = "ROOM", simulation: Boolean = false) =
         SignalSnapshot(id, area, id, at, 0, simulation, signals)
 
+    @Test fun wifiReportRetainsBriefChannelChangeAndSeparatesNewAddressOnExistingChannel() {
+        val facility = WifiChannelObservation("AA", "시설 AP", 2437, 1000, 1000, 1, -70, -70)
+        val moved = facility.copy(frequencyMhz = 5180, firstSeenMs = 2000, lastSeenMs = 2000)
+        val hotspot = facility.copy(address = "BB", name = "추가\n핫스팟", firstSeenMs = 199000, lastSeenMs = 199000, hidden = true, everHidden = true)
+        val before = snapshot("before", 1000).copy(wifiChannels = listOf(facility))
+        val after = snapshot("after", 200000).copy(wifiChannels = listOf(facility, moved, hotspot))
+        val report = signalReport(before, after, emptyList())
+        assertTrue(report.contains("[Wi-Fi 채널 변화]"))
+        assertTrue(report.contains("2.4 GHz · 채널 6 | 기준 관측 | 1 | 1 | 2 | 1 | 0"))
+        assertTrue(report.contains("5 GHz · 채널 36 | 기준 미관측 | 0 | 0 | 1 | 0 | 1"))
+        assertTrue(report.contains("추가\\n핫스팟"))
+        assertTrue(report.contains("같은 주소의 채널 변경: 2.4 GHz · 채널 6"))
+        assertTrue(report.contains("실제 트래픽 사용률이나 간섭량이 아닙니다"))
+        assertTrue(report.contains("숨김 SSID 이력 1개 주소 · 추가 숨김 AP 1 · 최근 숨김 AP 1"))
+        assertTrue(report.contains("SSID: 마지막 수신에 이름 미표시"))
+    }
+
+    @Test fun legacyWifiReportDoesNotClaimNewChannelsWithoutBaselineFrequencyData() {
+        val channel = WifiChannelObservation("AA", "AP", 5955, 2000, 2000, 1, -60, -60)
+        val report = signalReport(snapshot("old", 1000), snapshot("new", 2000).copy(wifiChannels = listOf(channel)), emptyList())
+        assertTrue(report.contains("기준에 주파수 기록이 없습니다"))
+        assertTrue(report.contains("6 GHz · 채널 1 | 비교 불가 | — | 1 | 1 | — | —"))
+        assertFalse(report.contains("6 GHz · 채널 1 | 기준 미관측"))
+    }
+
+    @Test fun legacyTargetDoesNotReportZeroCurrentWifiAccessPoints() {
+        val channel = WifiChannelObservation("AA", "AP", 5955, 1000, 1000, 1, -60, -60, hidden = true)
+        val before = snapshot("new-baseline", 1000).copy(wifiChannels = listOf(channel))
+        val report = signalReport(before, snapshot("legacy-target", 2000), emptyList())
+        assertTrue(report.contains("대상에 주파수 기록이 없습니다"))
+        assertTrue(report.contains("최근 숨김 AP 판단 불가"))
+        assertTrue(report.contains("6 GHz · 채널 1 | 비교 불가 | — | — | 1 | — | —"))
+    }
+
     @Test fun rejectsDifferentRoomModeAndReversedTime() {
         val baseline = snapshot("before", 1000)
         assertThrows(IllegalArgumentException::class.java) { signalReport(baseline, snapshot("after", 2000, area = "OTHER"), emptyList()) }

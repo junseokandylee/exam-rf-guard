@@ -22,7 +22,7 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 @Composable
-fun SnapshotScreen(vm: AppViewModel) {
+fun SnapshotScreen(vm: AppViewModel, onOpenChannels: () -> Unit = {}) {
     val records by vm.devices.collectAsState()
     val manualSnapshots by vm.savedSnapshots.collectAsState()
     val checkpoints by vm.checkpoints.collectAsState()
@@ -36,6 +36,8 @@ fun SnapshotScreen(vm: AppViewModel) {
     val area by vm.areaDraft.collectAsState()
     val session by vm.scanSession.collectAsState()
     val healthTick by vm.healthTick.collectAsState()
+    val channelAnalysis by vm.wifiChannelAnalysis.collectAsState()
+    val cellEnvironment by vm.cellEnvironmentState.collectAsState()
     var label by rememberSaveable { mutableStateOf("입실 전") }
     var group by rememberSaveable { mutableStateOf("추가") }
     var query by rememberSaveable { mutableStateOf("") }
@@ -66,8 +68,9 @@ fun SnapshotScreen(vm: AppViewModel) {
         }
     }
     val liveTargetAvailable = scanning || records.isNotEmpty()
-    val target = savedTarget ?: SignalSnapshot.capture("live", session?.area ?: area, "현재 수신·신규 이력", System.currentTimeMillis(), session?.startedAtMs ?: System.currentTimeMillis(), simulation, records,
-        includeNewHistorySinceMs = baseline?.capturedAtMs)
+    val liveCapturedAt = maxOf(healthTick, records.maxOfOrNull { it.lastSeenMs } ?: 0, session?.startedAtMs ?: 0)
+    val target = savedTarget ?: SignalSnapshot.capture("live", session?.area ?: area, if (scanning) "현재 수신·신규 이력" else "중지 시 마지막 관측", liveCapturedAt, session?.startedAtMs ?: liveCapturedAt, simulation, records,
+        includeNewHistorySinceMs = baseline?.capturedAtMs).let { live -> with(vm) { live.withDiscoveryContext() } }.copy(cellEnvironment = cellEnvironment)
     val comparison = remember(baseline, target, savedTarget, liveTargetAvailable) {
         if (savedTarget == null && !liveTargetAvailable) null else baseline?.let { runCatching { compareSnapshots(it, target) } }
     }
@@ -111,6 +114,9 @@ fun SnapshotScreen(vm: AppViewModel) {
                         Text("BLE ${bleHealth.label} · Wi-Fi ${wifiHealth.label}", color = if (bleHealth.warning || wifiHealth.warning) RfColors.warning else RfColors.primary, style = MaterialTheme.typography.labelSmall)
                     }
                     Text("${if (baseline == null) "이번 탐색에 포착된" else "최근 수신"} 주소 · BLE ${records.count { it.source == ScanSource.BLE && (baseline == null || it.presence != SignalPresence.HISTORY) }} · Wi-Fi ${records.count { it.source == ScanSource.WIFI && (baseline == null || it.presence != SignalPresence.HISTORY) }}", color = RfColors.primary, style = MaterialTheme.typography.labelSmall)
+                    val classicCount = records.count { it.source == ScanSource.CLASSIC && (baseline == null || it.presence != SignalPresence.HISTORY) }
+                    val directCount = records.count { it.source == ScanSource.P2P }
+                    if (classicCount > 0 || directCount > 0) Text("일반 Bluetooth $classicCount · Wi-Fi Direct 목록 $directCount", color = RfColors.primary, style = MaterialTheme.typography.labelSmall)
                     Button(onClick = { vm.saveSnapshot(area, label, asBaseline = baseline == null) }, enabled = scanning && !busy && area.isNotBlank() && label.isNotBlank(), modifier = Modifier.fillMaxWidth()) { RfGlyph(if (baseline == null) RfSymbol.SNAPSHOT else RfSymbol.UNION, color = MaterialTheme.colorScheme.onPrimary); Spacer(Modifier.width(8.dp)); Text(if (baseline == null) "① 입실 전 저장" else "② $label 저장하고 비교") }
                     TextButton(onClick = { captureOptions = !captureOptions }) { Text(if (captureOptions) "기록 옵션 닫기" else "다른 시점·기준 다시 설정") }
                     if (captureOptions) {
@@ -126,7 +132,7 @@ fun SnapshotScreen(vm: AppViewModel) {
         item {
             if (baseline != null) {
             Text("3  추가 장비 확인", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Text("${baseline?.area} · ${baseline?.signals?.size} → ${if (liveTargetAvailable || savedTarget != null) target.signals.size else "—"}개 주소 · ${if (savedTarget == null) "실시간 비교" else "저장 시점 비교"}", color = RfColors.textDim, style = MaterialTheme.typography.bodySmall)
+            Text("${baseline?.area} · ${baseline?.signals?.size} → ${if (liveTargetAvailable || savedTarget != null) target.signals.size else "—"}개 주소 · ${if (savedTarget != null) "저장 시점 비교" else if (scanning) "실시간 비교" else "중지 시점 비교"}", color = RfColors.textDim, style = MaterialTheme.typography.bodySmall)
             if (comparisonInfo) {
             Text(baseline?.let { "기준: ${it.area} / ${it.label}\n${snapshotTime(it.capturedAtMs)} · ${it.signals.size}개 주소" } ?: "아직 기준을 선택하지 않았습니다.", color = RfColors.primary, style = MaterialTheme.typography.bodyMedium)
             Spacer(Modifier.height(8.dp))
@@ -137,6 +143,20 @@ fun SnapshotScreen(vm: AppViewModel) {
         }
         if (comparison?.isFailure == true) item { Text(comparison.exceptionOrNull()?.message ?: "비교할 수 없는 자료입니다.", color = RfColors.warning) }
         if (result != null) {
+            item {
+                baseline?.let { discoveryScopeNote(it, target) }?.let { note ->
+                    Text(note, color = RfColors.warning, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            item {
+                val newChannels = channelAnalysis.channels.count { it.isNewChannel == true }
+                val addedHidden = channelAnalysis.addedHiddenAPCount ?: 0
+                OutlinedButton(onClick = onOpenChannels, modifier = Modifier.fillMaxWidth()) {
+                    RfGlyph(RfSymbol.WIFI, size = 18.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (channelAnalysis.canCompare) "Wi-Fi 새 채널 $newChannels · 추가 숨김 AP $addedHidden ›" else "Wi-Fi 채널 관측 확인 ›")
+                }
+            }
             item {
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("추가" to result.added.size, "미관측" to result.notObserved.size, "공통" to result.common.size).forEach { (name, count) ->
@@ -159,7 +179,10 @@ fun SnapshotScreen(vm: AppViewModel) {
                 }, color = RfColors.primary, style = MaterialTheme.typography.bodySmall)
                 Text("추가 주소는 확인 후보입니다. 일반 기기·임의 주소 변경·일시적 수신 누락도 원인일 수 있어 부정행위로 단정할 수 없습니다.", color = RfColors.textDim, style = MaterialTheme.typography.bodySmall)
                 }
-                if (comparisonInfo && baseline != null) SignalExportButton(baseline!!, target, snapshots)
+                if (comparisonInfo && baseline != null) {
+                    SignalExportButton(baseline!!, target, snapshots)
+                    target.cellEnvironment?.let { CellEnvironmentCard(it, scanning = savedTarget == null && scanning, simulation = simulation) }
+                }
             }
             if (analysisOptions) item {
                 OutlinedTextField(query, { query = it }, label = { Text("비교 결과 검색 · 이름/제조사/모델/MAC") },
@@ -188,7 +211,7 @@ fun SnapshotScreen(vm: AppViewModel) {
                 val tag = when (group) { "추가" -> "추가 관측"; "미관측" -> "이번에 미관측"; "전체 이력" -> "한 번 이상 관측"; else -> change?.let { "공통 · ${if (it >= 0) "+" else ""}${it.roundToInt()} dB" } ?: "공통" }
                 Surface(onClick = { selectedSignal = signal; selectedFromBaseline = group == "미관측"; detailHelp = false; timelineExpanded = false; periodsExpanded = false }, color = RfColors.surface, shape = RoundedCornerShape(16.dp)) {
                     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("$tag · ${signal.source} · ${signal.presence.label}", color = if (group == "추가") RfColors.warning else RfColors.primary, style = MaterialTheme.typography.labelSmall)
+                        Text("$tag · ${signal.source.label} · ${signal.presence.labelFor(signal.source)}", color = if (group == "추가") RfColors.warning else RfColors.primary, style = MaterialTheme.typography.labelSmall)
                         SignalSummary(signal)
                         Text(if (group == "미관측") "입실 전 기준 기록 · 상세 보기 ›" else "유형·모델은 후보 · 상세 보기 ›", color = RfColors.primary, style = MaterialTheme.typography.labelSmall)
                     }
@@ -216,7 +239,7 @@ fun SnapshotScreen(vm: AppViewModel) {
                     Text("${snapshot.area} / ${snapshot.label}${if (snapshot.simulation) " · 연습" else ""}", fontWeight = FontWeight.SemiBold)
                     Text("${snapshotTime(snapshot.capturedAtMs)} · ${snapshot.signals.size}개 주소", color = RfColors.textDim, style = MaterialTheme.typography.bodySmall)
                     Text("수집 시작 ${snapshotTime(snapshot.scanStartedAtMs)}", color = RfColors.textDim, style = MaterialTheme.typography.labelSmall)
-                    Text("BLE ${snapshot.signals.count { it.source == ScanSource.BLE }} · Wi-Fi ${snapshot.signals.count { it.source == ScanSource.WIFI }}", color = RfColors.primary, style = MaterialTheme.typography.labelSmall)
+                    Text(snapshot.signals.groupingBy { it.source }.eachCount().entries.joinToString(" · ") { "${it.key.label} ${it.value}" }.ifEmpty { "저장된 주소 없음" }, color = RfColors.primary, style = MaterialTheme.typography.labelSmall)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = { vm.selectBaseline(snapshot) }, modifier = Modifier.weight(1f)) { Text(if (baseline?.id == snapshot.id) "선택된 기준" else "기준으로 선택") }
                         TextButton(onClick = { vm.comparisonSnapshot.value = snapshot }, modifier = Modifier.weight(1f)) { Text(if (savedTarget?.id == snapshot.id) "선택된 대상" else "대상으로 선택") }
@@ -229,16 +252,18 @@ fun SnapshotScreen(vm: AppViewModel) {
     selectedSignal?.let { signal -> AlertDialog(onDismissRequest = { selectedSignal = null }, title = { Text(signal.name) }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             SignalSummary(signal)
-            Text("${if (savedTarget != null || selectedFromBaseline) "저장 당시" else "현재"} · ${signal.presence.label}", color = RfColors.primary)
+            Text("${if (savedTarget != null || selectedFromBaseline) "저장 당시" else if (scanning) "현재" else "중지 당시"} · ${signal.presence.labelFor(signal.source)}", color = RfColors.primary)
+            signal.source.observationNote().takeIf { it.isNotEmpty() }?.let { Text(it, color = RfColors.warning, style = MaterialTheme.typography.bodySmall) }
+            RadioMetadataPanel(signal.radioMetadata)
             if (selectedFromBaseline) Text("입실 전 기준 기록 · 이번에는 미관측", color = RfColors.warning)
             ExplanationToggle("관측 구간·재등장 보기", periodsExpanded, { periodsExpanded = !periodsExpanded })
             if (periodsExpanded) ObservationPeriodList(signal)
             ExplanationToggle("식별 근거·시간 해석 보기", detailHelp, { detailHelp = !detailHelp })
             if (detailHelp) {
-            Text("최초~마지막 수신 사이의 관측 구간입니다. 계속 송신·연결된 시간은 아니며 중간 공백은 알 수 없습니다.", color = RfColors.textDim, style = MaterialTheme.typography.bodySmall)
+            if (signal.source != ScanSource.P2P) Text("최초~마지막 수신 사이의 관측 구간입니다. 계속 송신·연결된 시간은 아니며 중간 공백은 알 수 없습니다.", color = RfColors.textDim, style = MaterialTheme.typography.bodySmall)
             Text("${signal.source} · ${signal.address}")
-            Text("수신 세기 ${signal.rssi?.roundToInt() ?: "—"} dBm · 0에 가까울수록 강합니다. 거리나 위치를 확정하지 않습니다.", color = RfColors.textDim, style = MaterialTheme.typography.bodySmall)
-            estimateDistance(signal.rssi, signal.referenceRssiAt1m)?.let { estimate ->
+            if (signal.source != ScanSource.P2P) Text("수신 세기 ${signal.receivedRssi?.roundToInt() ?: "—"} dBm · 0에 가까울수록 강합니다. 거리나 위치를 확정하지 않습니다.", color = RfColors.textDim, style = MaterialTheme.typography.bodySmall)
+            estimateDistance(signal.receivedRssi, signal.referenceRssiAt1m)?.let { estimate ->
                 Text("${estimate.label} · ${estimate.rangeLabel}\n${if (estimate.assumedReference) "1m RSSI −59 dBm 가정 · 기기별 보정 없음" else "기기에서 받은 1m RSSI 기준 사용"}\nn=2.7, RSSI ±6 dB·경로손실 n=2~4로 범위를 계산합니다. 미보정 기준은 ±10 dB도 적용합니다. 범위는 모델 가정이며 통계적 신뢰구간이 아닙니다. 벽·인체·송신 출력에 따라 실제 거리는 범위 밖일 수 있습니다. 마지막 수신 기준이며 현재 위치가 아닙니다.", style = MaterialTheme.typography.bodySmall, color = RfColors.textDim)
             }
             Text(signal.manufacturer)
@@ -248,7 +273,7 @@ fun SnapshotScreen(vm: AppViewModel) {
             else AudioIdentityPanel(audio, audio?.model ?: signal.modelHint, audioEvidenceNote(audio, signal.manufacturerIds))
             if (audio != null && signal.modelHint != null && audio.model != signal.modelHint) Text("저장 당시 모델 후보: ${signal.modelHint}\n위 후보는 저장된 광고 이름을 현재 규칙으로 해석한 값입니다.", color = RfColors.textDim, style = MaterialTheme.typography.bodySmall)
             if (selectedFromBaseline) Text("이번 시점에는 미관측입니다. 아래 상태와 시간은 입실 전 기준 기록입니다.", color = RfColors.warning)
-            Text(signal.presence.observationMeaning(savedTarget != null || selectedFromBaseline))
+            if (signal.source != ScanSource.P2P) Text(signal.presence.observationMeaning(savedTarget != null || selectedFromBaseline))
             if (signal.manufacturerIds.isNotEmpty()) Text("광고 회사 코드: " + signal.manufacturerIds.sorted().joinToString { "0x" + it.toString(16).uppercase().padStart(4, '0') })
             }
             HorizontalDivider(color = RfColors.grid)
@@ -261,7 +286,7 @@ fun SnapshotScreen(vm: AppViewModel) {
                         Text(point.snapshot.label, style = MaterialTheme.typography.bodyMedium)
                         Text(snapshotTime(point.snapshot.capturedAtMs), color = RfColors.textDim, style = MaterialTheme.typography.labelSmall)
                     }
-                    Text(point.signal?.let { "${it.rssi?.roundToInt() ?: "—"} dBm\n${it.presence.label}" } ?: "미관측", color = if (point.signal == null) RfColors.textDim else RfColors.primary, style = MaterialTheme.typography.labelMedium)
+                    Text(point.signal?.let { if (it.source == ScanSource.P2P) "목록 확인 기록" else "${it.receivedRssi?.roundToInt() ?: "—"} dBm\n${it.presence.labelFor(it.source)}" } ?: "미관측", color = if (point.signal == null) RfColors.textDim else RfColors.primary, style = MaterialTheme.typography.labelMedium)
                 }
             }
             Text("미관측은 해당 시점 자료에 주소가 없다는 뜻입니다. 기기의 전원·위치를 확정하지 않습니다.", color = RfColors.textDim, style = MaterialTheme.typography.bodySmall)
