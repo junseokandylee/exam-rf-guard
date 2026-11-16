@@ -227,6 +227,37 @@ class WifiChannelAnalysisTest {
         assertNull(analyzeWifiChannels(null, target).addedHiddenAPCount)
     }
 
+    @Test fun scopeFirstAndPeakSurviveSameFrequencySessionReplacementWithoutCombiningSessionCountsOrPeriods() {
+        val old = observation("aa", 2412, 1500, count = 7, first = 500, peak = -30)
+        val latest = observation("AA", 2412, 2500, count = 2, first = 2000, peak = -80)
+        val analysis = analyzeWifiChannels(snapshot("before", 0, emptyList()),
+            snapshot("target", 3000, listOf(latest)), listOf(snapshot("old-session", 1600, listOf(old))))
+        val point = analysis.channels.single().accessPoints.single()
+        assertEquals(500L, point.scopeFirstSeenMs)
+        assertEquals(-30, point.scopePeakRssi)
+        assertEquals(latest, point.observation)
+        assertEquals(2, point.observation.observationCount)
+        assertEquals(listOf(ObservationPeriod(2000, 2500, 2)), point.observation.periods)
+        assertEquals(2000L, point.observation.firstSeenMs)
+        assertEquals(-80, point.observation.peakRssi)
+    }
+
+    @Test fun scopeFirstAndPeakIgnoreEarlierFutureOtherAreaAndOtherModeSaves() {
+        val before = snapshot("before", 1000, emptyList())
+        val valid = snapshot("valid", 2000, listOf(observation("a", 2412, 1900, first = 1500, peak = -50)))
+        val excluded = observation("a", 2412, 900, first = 100, peak = -5)
+        val target = snapshot("target", 4000, listOf(observation("A", 2412, 3900, first = 3500, peak = -80)))
+        val archive = listOf(valid,
+            snapshot("earlier", 999, listOf(excluded)),
+            snapshot("future", 4001, listOf(excluded)),
+            snapshot("other-area", 2500, listOf(excluded)).copy(area = "Other room"),
+            snapshot("other-mode", 2500, listOf(excluded)).copy(simulation = true))
+        val point = analyzeWifiChannels(before, target, archive).channels.single().accessPoints.single()
+        assertEquals(1500L, point.scopeFirstSeenMs)
+        assertEquals(-50, point.scopePeakRssi)
+        assertEquals(3500L, point.observation.firstSeenMs)
+    }
+
     private fun observation(address: String, frequency: Int, at: Long, count: Int = 1, first: Long = at, peak: Int = -50) =
         WifiChannelObservation(address, "AP $address", frequency, first, at, count, -60, peak, listOf(ObservationPeriod(first, at, count)))
 

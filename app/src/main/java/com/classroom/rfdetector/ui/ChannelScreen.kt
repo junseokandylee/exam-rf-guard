@@ -10,6 +10,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -18,13 +19,17 @@ import androidx.compose.ui.unit.dp
 import com.classroom.rfdetector.AppViewModel
 import com.classroom.rfdetector.core.*
 
+enum class UiChannelView { NETWORKS, COMPARISON }
+
 @Composable
-fun ChannelScreen(vm: AppViewModel, onOpenComparison: () -> Unit = {}) {
+fun ChannelScreen(vm: AppViewModel, onOpenComparison: () -> Unit = {},
+    initialView: UiChannelView = UiChannelView.NETWORKS, viewRequestKey: Int = 0) {
     val analysis by vm.wifiChannelAnalysis.collectAsState()
     val simulation by vm.simMode.collectAsState()
     val scanning by vm.scanning.collectAsState()
     val savedTarget by vm.comparisonSnapshot.collectAsState()
     ChannelContent(analysis, simulation, savedTarget != null, onOpenComparison, scanning = scanning,
+        initialView = initialView, viewRequestKey = viewRequestKey,
         onUseCurrent = { vm.comparisonSnapshot.value = null },
         onSimAddWifi = if (simulation && scanning) ({ vm.simAddWifiDevice() }) else null,
         onSimAddHidden = if (simulation && scanning) ({ vm.simAddWifiDevice(hidden = true) }) else null)
@@ -42,6 +47,50 @@ internal fun ChannelContent(
     onSimAddWifi: (() -> Unit)? = null,
     onSimAddHidden: (() -> Unit)? = null,
     scanning: Boolean = false,
+    initialView: UiChannelView = UiChannelView.NETWORKS,
+    viewRequestKey: Int = 0,
+) {
+    var view by rememberSaveable { mutableStateOf(initialView) }
+    var lastHandledRequest by rememberSaveable { mutableIntStateOf(viewRequestKey) }
+    val states = rememberSaveableStateHolder()
+    LaunchedEffect(initialView, viewRequestKey) {
+        if (viewRequestKey != lastHandledRequest) {
+            view = initialView
+            lastHandledRequest = viewRequestKey
+        }
+    }
+    Column(Modifier.fillMaxSize()) {
+        FlowRow(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = view == UiChannelView.NETWORKS, onClick = { view = UiChannelView.NETWORKS },
+                label = { Text("주변 네트워크") }, leadingIcon = { RfGlyph(RfSymbol.WIFI, size = 16.dp) },
+                modifier = Modifier.testTag("wifi-view-networks"))
+            FilterChip(selected = view == UiChannelView.COMPARISON, onClick = { view = UiChannelView.COMPARISON },
+                label = { Text("채널 비교") }, leadingIcon = { RfGlyph(RfSymbol.UNION, size = 16.dp) },
+                modifier = Modifier.testTag("wifi-view-comparison"))
+        }
+        Box(Modifier.weight(1f)) {
+            states.SaveableStateProvider(view.name) {
+                if (view == UiChannelView.NETWORKS) WifiNetworksPanel(analyzeWifiNetworks(analysis), simulation,
+                    savedComparison, scanning, onUseCurrent, onSimAddWifi, onSimAddHidden)
+                else ChannelComparisonContent(analysis, simulation, savedComparison, onOpenComparison,
+                    onUseCurrent, onSimAddWifi, onSimAddHidden, scanning)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ChannelComparisonContent(
+    analysis: WifiChannelAnalysis,
+    simulation: Boolean,
+    savedComparison: Boolean,
+    onOpenComparison: () -> Unit,
+    onUseCurrent: () -> Unit,
+    onSimAddWifi: (() -> Unit)?,
+    onSimAddHidden: (() -> Unit)?,
+    scanning: Boolean,
 ) {
     var band by rememberSaveable { mutableStateOf<WifiBand?>(null) }
     var newOnly by rememberSaveable { mutableStateOf(false) }

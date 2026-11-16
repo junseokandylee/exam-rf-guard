@@ -78,6 +78,7 @@ fun ScanStatusScreen(vm: AppViewModel, onCompare: () -> Unit, onDevices: () -> U
             RadioReceptionCard(RfSymbol.BLUETOOTH, "일반 Bluetooth", health,
                 devices.filter { it.source == ScanSource.CLASSIC }, simulation, "검색 가능한 기기의 발견 응답 · 연결 중인 모든 이어폰을 뜻하지 않습니다")
         }
+        item { BluetoothChannelHelp() }
         item {
             val health = if (simulation) null else wifiScanHealth(scanning, vm.wifi.isEnabled(), !vm.locationServicesOff(),
                 vm.wifi.lastUpdatedMs, vm.wifi.lastError, now)
@@ -124,6 +125,20 @@ fun ScanStatusScreen(vm: AppViewModel, onCompare: () -> Unit, onDevices: () -> U
                     Text("유형·제조사·모델과 거리는 관측 정보에 근거한 후보·추정값입니다. AI 사용이나 소유자를 알아내는 기능은 아닙니다.", color = RfColors.textDim, style = MaterialTheme.typography.bodySmall)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun BluetoothChannelHelp() {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    ScanStatusPanel {
+        ExplanationToggle("Bluetooth도 채널로 볼 수 있나요?", expanded) { expanded = !expanded }
+        if (expanded) {
+            Text("Wi-Fi는 공유기·핫스팟이 알린 채널을 표시합니다. Bluetooth는 연결 중 여러 채널을 바꿔 가며 통신하고, Android는 주변 기기의 채널별 사용 현황을 일반 앱에 제공하지 않습니다.", style = MaterialTheme.typography.bodySmall)
+            Text("이 앱은 기기가 자신을 알리는 신호와 검색에 응답한 기록을 보여줍니다. 다른 두 기기가 연결되어 통신하더라도 발견용 신호가 없으면 보이지 않을 수 있습니다.", style = MaterialTheme.typography.bodySmall)
+            Text("검색에 안 나옴 ≠ Bluetooth를 사용하지 않음", color = RfColors.warning, fontWeight = FontWeight.SemiBold)
+            Text("외부 전용 수신 장비는 조건에 따라 통신 신호를 관찰할 수 있지만, 현재 앱에는 연동되어 있지 않습니다. 통신 여부 관측과 내용 해독은 다릅니다.", style = MaterialTheme.typography.bodySmall, color = RfColors.textDim)
         }
     }
 }

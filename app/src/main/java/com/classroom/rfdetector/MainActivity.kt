@@ -62,6 +62,13 @@ private fun AppContent() {
     })[AppViewModel::class.java] }
     val lifecycle = (context as ComponentActivity).lifecycle
     var tab by rememberSaveable { mutableIntStateOf(2) }
+    var channelView by rememberSaveable { mutableStateOf(UiChannelView.NETWORKS) }
+    var channelViewRequest by rememberSaveable { mutableIntStateOf(0) }
+    fun openChannels(view: UiChannelView) {
+        channelView = view
+        channelViewRequest++
+        tab = 3
+    }
     val screenStates = rememberSaveableStateHolder()
     var help by remember { mutableStateOf(false) }
     var pendingStart by remember { mutableStateOf(false) }
@@ -125,7 +132,7 @@ private fun AppContent() {
                 tabOrder.forEach { index ->
                     val title = listOf("레이더", "기기 ${devices.size}", "비교", "Wi-Fi 채널", "수신 상태")[index]
                     val label = if (compact) listOf("탐색", "기기", "비교", "채널", "수신")[index] else listOf("레이더", "기기 ${devices.size}", "비교", "채널", "수신")[index]
-                    Tab(selected = tab == index, onClick = { tab = index }, modifier = Modifier.semantics { contentDescription = title }, selectedContentColor = RfColors.primary, unselectedContentColor = RfColors.textDim) {
+                    Tab(selected = tab == index, onClick = { if (index == 3) openChannels(UiChannelView.NETWORKS) else tab = index }, modifier = Modifier.semantics { contentDescription = title }, selectedContentColor = RfColors.primary, unselectedContentColor = RfColors.textDim) {
                         Text(label, Modifier.padding(horizontal = 2.dp, vertical = 14.dp), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, maxLines = 1)
                     }
                 }
@@ -134,7 +141,7 @@ private fun AppContent() {
                 Surface(color = RfColors.surfaceAlt) {
                     Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text("기준에 없던 채널 · $latestNewWifiChannel", Modifier.weight(1f), color = RfColors.warning, style = MaterialTheme.typography.bodySmall, maxLines = 2)
-                        TextButton(onClick = { tab = 3; vm.comparisonSnapshot.value = null; vm.latestNewWifiChannel.value = null }) { Text("채널 확인") }
+                        TextButton(onClick = { openChannels(UiChannelView.COMPARISON); vm.comparisonSnapshot.value = null; vm.latestNewWifiChannel.value = null }) { Text("채널 확인") }
                     }
                 }
             } else latestNewSignal?.let { name ->
@@ -149,8 +156,8 @@ private fun AppContent() {
                 screenStates.SaveableStateProvider(tab) { when (tab) {
                     0 -> RadarScreen(vm, devices.filter { it.presence == SignalPresence.RECENT && it.source != com.classroom.rfdetector.core.ScanSource.P2P }, heading)
                     1 -> DeviceListScreen(vm, devices, baselineSet, newCount)
-                    2 -> SnapshotScreen(vm, onOpenChannels = { tab = 3 })
-                    3 -> ChannelScreen(vm, onOpenComparison = { tab = 2 })
+                    2 -> SnapshotScreen(vm, onOpenChannels = { openChannels(UiChannelView.COMPARISON) })
+                    3 -> ChannelScreen(vm, onOpenComparison = { tab = 2 }, initialView = channelView, viewRequestKey = channelViewRequest)
                     else -> ScanStatusScreen(vm, onCompare = { tab = 2 }, onDevices = { tab = 1 })
                 } }
             }

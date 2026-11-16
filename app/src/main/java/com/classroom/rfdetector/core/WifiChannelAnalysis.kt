@@ -18,6 +18,10 @@ data class WifiChannelAccessPoint(
     val latestChannelAmbiguous: Boolean = false,
     /** True if this BSSID/frequency had a hidden SSID in any saved session in the selected interval. */
     val hasHiddenHistory: Boolean = observation.hidden || observation.everHidden,
+    /** Earliest first observation in the selected saved records, not the device's lifetime. */
+    val scopeFirstSeenMs: Long = observation.firstSeenMs,
+    /** Strongest reported value among those records; observation retains latest-session statistics. */
+    val scopePeakRssi: Int? = observation.peakRssi,
 )
 
 data class WifiChannelSummary(
@@ -113,7 +117,10 @@ fun analyzeWifiChannels(baseline: SignalSnapshot?, target: SignalSnapshot, archi
             val movedFrom = if (comparable && validBaseline != null && observation.lastSeenMs > validBaseline.capturedAtMs &&
                 frequency !in prior) prior else emptyList()
             val hiddenHistory = versions.any { it.first.hidden || it.first.everHidden }
-            WifiChannelAccessPoint(observation, recent, if (comparable) address !in baselineAddresses else null, movedFrom, ambiguous, hiddenHistory)
+            WifiChannelAccessPoint(observation, recent, if (comparable) address !in baselineAddresses else null,
+                movedFrom, ambiguous, hiddenHistory,
+                scopeFirstSeenMs = versions.minOf { it.first.firstSeenMs },
+                scopePeakRssi = versions.mapNotNull { it.first.peakRssi }.maxOrNull())
         }.sortedWith(compareByDescending<WifiChannelAccessPoint> { it.isRecent }.thenByDescending { it.observation.lastSeenMs }
             .thenBy { addressKey(it.observation.address) })
         val baselineCount = baselineObservations.filter { it.frequencyMhz == frequency }.map { addressKey(it.address) }.distinct().size

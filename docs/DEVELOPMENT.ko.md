@@ -1,8 +1,8 @@
 # 빌드·구조·검증 안내
 
-일반 사용자는 [README](../README.md)와 [화면 사용법](QUICKSTART.ko.md)을 먼저 참고하세요. 이 문서는 v1.3.0-preview.1 구현을 확인하거나 수정하는 개발자를 위한 설명입니다.
+일반 사용자는 [README](../README.md)와 [화면 사용법](QUICKSTART.ko.md)을 먼저 참고하세요. 이 문서는 v1.3.1-preview.1 구현을 확인하거나 수정하는 개발자를 위한 설명입니다.
 
-앱 버전은 `versionName = "1.3.0-preview.1"`, `versionCode = 4`입니다. 스냅샷 저장 형식은 v3이며 v1·v2 자료를 읽습니다.
+앱 버전은 `versionName = "1.3.1-preview.1"`, `versionCode = 5`입니다. 스냅샷 저장 형식은 v3이며 v1·v2 자료를 읽습니다.
 
 ## 빌드 환경
 
@@ -128,6 +128,18 @@ P2P 주소는 장비 주소 이력·비교·합집합에 출처를 구분해 포
 
 ## Wi-Fi 채널·숨김 이력의 계약
 
+### 주소별 주변 네트워크 보기
+
+`analyzeWifiNetworks(WifiChannelAnalysis)`는 채널 이력을 BSSID별로 묶고 가장 최근 관측을 먼저 선택합니다. 그 뒤 대역을 필터링하므로, AP가 다른 대역으로 옮겨 간 과거 채널을 현재 채널로 되살리지 않습니다. 같은 SSID를 쓰는 다른 BSSID는 각각 유지합니다. 동률의 최신 주파수가 여러 개면 채널을 확정하지 않고 별도 미확정 목록에 남깁니다.
+
+`WifiNetworkAnalysis`는 최근·과거 이력·채널 미확정·대상 자료 없음 상태를 구분합니다. 구형 대상의 채널 정보 부재는 최근 개수 `null`이며 0으로 바꾸지 않습니다. 이름·현재 숨김·메타데이터는 최신 관측을 사용하고 숨김 이력은 관련 기록 전체에서 보존합니다. 주파수별 누적 횟수나 저장본의 횟수를 더하지 않습니다.
+
+`WifiChannelAccessPoint.scopeFirstSeenMs`와 `scopePeakRssi`는 선택 범위의 저장본 전체에서 최초 시각과 최대 세기를 보존합니다. 탐색을 다시 시작한 같은 주소·같은 주파수도 이전 최초 시각을 잃지 않습니다. `observation`의 횟수·구간은 최신 세션의 누적 기록을 유지하며, 범위 전체의 연속 수신 시간이나 횟수로 바꾸지 않습니다.
+
+`wifiNetworkPlot(analysis, band)`는 최근 관측 중 최신 채널이 하나이고 RSSI가 있는 주소만 좌표로 바꿉니다. 가로축은 주 채널 주파수, 세로축은 RSSI이며 같은 좌표를 인위적으로 흩뜨리지 않습니다. RSSI 축 밖의 값은 가장자리에 배치하되 원래 값과 범위 초과 표시를 유지합니다. 채널 폭을 스펙트럼 파형으로 그리거나 통신 사용률을 만들어 내지 않습니다.
+
+`ChannelScreen`의 기본 보기는 `주변 네트워크`입니다. 새 채널 알림과 비교 화면의 채널 버튼은 `채널 비교`로 이동하고, 채널 탭을 직접 누르면 주변 보기로 돌아갑니다. 선택한 저장 대상·실시간·중지 당시 시점을 계속 구분합니다.
+
 ### 수집과 보존
 
 `WifiScanner`는 Android `ScanResult.frequency`를 `RfObservation.frequencyMhz`에 전달합니다. 같은 BSSID의 같거나 이전 시각인 결과를 다시 세지 않으며, 채널 번호가 달라졌다는 이유만으로 오래된 결과를 새 관측으로 바꾸지 않습니다. 실제 무선 경로와 가상 데이터 경로 모두 같은 주파수 필드를 사용합니다.
@@ -172,6 +184,16 @@ Android 결과의 SSID가 null·빈 문자열·공백이면 `RfObservation.hidde
 
 v1·v2를 읽어 v3로 다시 저장해도 채널 정보의 `null`을 빈 목록으로 바꾸지 않습니다. 구형 기준의 정보 부재를 '기준 채널 0개'로 해석하면 모든 채널이 신규로 보이기 때문입니다. 현재 버전에서 새 기준을 저장해야 채널 비교가 확정됩니다. 수동 스냅샷과 자동 보존 기록에 같은 저장 형식을 사용합니다.
 
+## Bluetooth 채널 관측·루팅의 범위
+
+Wi-Fi `ScanResult.frequency`와 달리 Android의 일반 BLE `ScanResult`에는 수신 RF 채널 번호나 중심 주파수 필드가 없습니다. `primaryPhy`·`secondaryPhy`는 LE 1M·LE 2M·LE Coded 같은 물리 계층 방식이며 RF 채널 번호로 변환할 수 없습니다. 발견 결과를 받는 API를 제3자 연결의 패킷 캡처나 대역 전체 에너지 측정으로 확대해 설명하지 않습니다. [Android BLE 결과 필드](https://developer.android.com/reference/android/bluetooth/le/ScanResult), [Bluetooth SIG 채널·호핑 설명](https://www.bluetooth.com/learn-about-bluetooth/tech-overview/)
+
+루팅으로 HCI 로그를 읽더라도 일반적으로 그 단말의 host↔controller 교환을 보는 것입니다. 주변의 관계없는 두 기기 사이 무선 링크를 수신하도록 칩이 바뀌지는 않습니다. [AOSP 디버깅 설명](https://source.android.com/docs/core/connect/bluetooth/verifying_debugging)
+
+일부 지원 칩·펌웨어의 InternalBlue 연구에는 저수준 진단과 BLE 광고 채널 보고가 있습니다. 이는 이 앱의 기능도, 임의 Android 단말의 제3자 연결 전부를 관찰할 수 있다는 보장도 아닙니다. 앱은 root·펌웨어 패치·HCI 기록 수집을 하지 않습니다. [InternalBlue 지원 기능](https://github.com/seemoo-lab/internalblue/blob/master/doc/features.md)
+
+외부 BLE 스니퍼는 지원되는 링크를 추적할 수 있는 경우가 있지만 연결을 놓칠 수 있고, BLE 지원을 Classic 오디오 통신 지원으로 간주하면 안 됩니다. 전송 관측과 암호화된 내용 해독도 별개입니다. 현재 앱에는 외부 수신기 연동이 없습니다. [Nordic 도구 설명](https://docs.nordicsemi.com/r/bundle/nrfutil/page/nrfutil-ble-sniffer/wireshark_sniffer_overview.html)
+
 ## 거리 모델
 
 EMA RSSI와 아래 모델을 사용합니다.
@@ -188,7 +210,7 @@ A = 기기에서 받은 유효한 1m RSSI 기준, 없으면 −59 dBm 가정
 
 ## 검증과 남은 한계
 
-2026년 11월 16일 v1.3.0-preview.1 기준 241개 테스트, `assembleDebug`, `lintDebug`가 통과했습니다. Lint는 오류 0개·경고 21개입니다. 테스트의 전체 목록은 [test 소스](../app/src/test/java/com/classroom/rfdetector)에 있습니다.
+2026년 11월 16일 v1.3.1-preview.1 기준 268개 테스트, `assembleDebug`, `lintDebug`가 통과했습니다. 테스트 실패·오류·건너뜀은 0개이며 Lint는 오류 0개·경고 21개입니다. 테스트의 전체 목록은 [test 소스](../app/src/test/java/com/classroom/rfdetector)에 있습니다.
 
 관측·비교·보존·식별·스캐너 콜백·Android UI·내보내기를 검증합니다. Wi-Fi 채널에서는 단발 관측·채널 이동·지연 수신·재등장, 주소 필터와 독립적인 보존, 숨김→이름 표시 후 과거 숨김 유지, v1/v2/v3 호환과 null/빈 목록 구분을 검증합니다. 화면 캡처에는 연습 모드나 결정적인 테스트 입력을 사용합니다. 실제 무선 수신 환경, 시스템 권한 대화상자의 단말별 차이, 센서 정확도, 발열·배터리를 대신 검증하지 않습니다.
 

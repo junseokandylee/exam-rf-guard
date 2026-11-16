@@ -38,6 +38,7 @@ class ChannelFlowTest {
     @Test fun newChannelsKeepBriefHiddenHistoryAndDistinguishAnExistingApMove() {
         val analysis = scenario()
         compose.setContent { AppRfTheme { Surface(color = RfColors.bg) { ChannelContent(analysis, simulation = true, savedComparison = true) } } }
+        openComparison()
         compose.onNodeWithText("② 기준에 없던 채널 3개").assertIsDisplayed()
         compose.onNodeWithText("새 AP 2개").assertExists()
         compose.onNodeWithText("기존 AP 채널 이동 1개").assertExists()
@@ -67,6 +68,7 @@ class ChannelFlowTest {
 
     @Test fun bandAndHiddenFiltersKeepPreviouslyHiddenNamesDiscoverable() {
         compose.setContent { AppRfTheme { Surface(color = RfColors.bg) { ChannelContent(scenario(), simulation = true) } } }
+        openComparison()
         compose.onNodeWithText("중지 시 마지막 관측 ·", substring = true).assertExists()
         scrollToTag("channel-hidden-only")
         compose.onNodeWithTag("channel-hidden-only").performClick().assertIsSelected()
@@ -90,6 +92,7 @@ class ChannelFlowTest {
         val analysis = analyzeWifiChannels(before.copy(wifiChannels = null), after, archive)
         var openedComparison = false
         compose.setContent { AppRfTheme { Surface(color = RfColors.bg) { ChannelContent(analysis, onOpenComparison = { openedComparison = true }) } } }
+        openComparison()
         compose.onNodeWithText("기준에 주파수 기록이 없습니다.", substring = true).assertExists()
         compose.onNodeWithText("비교에서 기준·대상 선택").performClick()
         assertTrue(openedComparison)
@@ -109,6 +112,7 @@ class ChannelFlowTest {
                 AppRfTheme { Surface(color = RfColors.bg) { ChannelContent(scenario(), simulation = true) } }
             }
         }
+        openComparison()
         scrollToTag("channel-new-only")
         compose.onNodeWithTag("channel-new-only").performClick().assertIsSelected()
         scrollToTag("channel-card-2412")
@@ -128,6 +132,7 @@ class ChannelFlowTest {
         val (before, after, _) = scenarioSnapshots()
         val analysis = analyzeWifiChannels(before, after.copy(wifiChannels = null))
         compose.setContent { AppRfTheme { Surface(color = RfColors.bg) { ChannelContent(analysis, savedComparison = true) } } }
+        openComparison()
         scrollToText("대상에 주파수 기록이 없어 최근 AP 분포를 알 수 없습니다")
         compose.onNodeWithText("대상에 주파수 기록이 없어 최근 AP 분포를 알 수 없습니다").assertIsDisplayed()
         compose.onAllNodesWithText("최근 90초 · AP 수와 수신 세기").assertCountEquals(0)
@@ -182,6 +187,8 @@ class ChannelFlowTest {
         compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasTestTag(tag))
         compose.onNodeWithTag(tag).performScrollTo()
     }
+
+    private fun openComparison() { compose.onNodeWithTag("wifi-view-comparison").performClick().assertIsSelected() }
 
     private fun scrollToText(text: String, substring: Boolean = false) {
         compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText(text, substring = substring))

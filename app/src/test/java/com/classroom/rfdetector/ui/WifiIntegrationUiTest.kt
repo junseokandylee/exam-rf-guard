@@ -42,6 +42,8 @@ class WifiIntegrationUiTest {
                 vm.selectBaseline(SignalSnapshot("saved-before", "시험실", "입실 전", at, at, true, emptyList(), listOf(channel)))
             }
             compose.onNodeWithContentDescription("Wi-Fi 채널").performClick()
+            compose.onNodeWithTag("wifi-view-networks").assertIsSelected()
+            compose.onNodeWithTag("wifi-view-comparison").performClick()
             compose.waitUntil(10_000) { vm.wifiChannelAnalysis.value.comparisonState == WifiChannelComparisonState.TARGET_UNKNOWN }
             assertFalse(vm.wifiChannelAnalysis.value.targetChannelDataAvailable)
             compose.onNodeWithText("대상에 주파수 기록이 없습니다.", substring = true).assertExists()
@@ -57,6 +59,7 @@ class WifiIntegrationUiTest {
             saveTarget(vm, "입실 후")
             val frozen = vm.comparisonSnapshot.value!!
             compose.onNodeWithContentDescription("Wi-Fi 채널").performClick()
+            compose.onNodeWithTag("wifi-view-networks").assertIsSelected()
             compose.waitUntil(10_000) { vm.wifiChannelAnalysis.value.canCompare }
             compose.runOnIdle { vm.simAddWifiDevice(hidden = true) }
             advanceSimulation()
@@ -67,6 +70,7 @@ class WifiIntegrationUiTest {
 
             compose.onNodeWithText("채널 확인").performClick()
             compose.onNodeWithContentDescription("Wi-Fi 채널").assertIsSelected()
+            compose.onNodeWithTag("wifi-view-comparison").assertIsSelected()
             compose.waitUntil(10_000) { vm.wifiChannelAnalysis.value.addedHiddenAPCount == 1 }
             assertNull(vm.comparisonSnapshot.value)
             val added = vm.wifiChannelAnalysis.value.channels.single { it.frequencyMhz == 2462 }
