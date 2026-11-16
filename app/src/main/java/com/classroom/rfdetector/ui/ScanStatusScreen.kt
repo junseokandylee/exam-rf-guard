@@ -1,5 +1,7 @@
 package com.classroom.rfdetector.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,6 +32,10 @@ fun ScanStatusScreen(vm: AppViewModel, onCompare: () -> Unit, onDevices: () -> U
     val expanded by vm.expandedDiscovery.collectAsState()
     val bluetoothPhase by vm.bluetoothPhase.collectAsState()
     val cellEnvironment by vm.cellEnvironmentState.collectAsState()
+    val journal by vm.bleJournalStatus.collectAsState()
+    val journalExportBusy by vm.bleJournalExportBusy.collectAsState()
+    val journalExportMessage by vm.bleJournalExportMessage.collectAsState()
+    val journalExport = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/x-ndjson"), vm::exportBleJournal)
     var limitsOpen by rememberSaveable { mutableStateOf(false) }
     val now = maxOf(tick, System.currentTimeMillis())
     val currentCheckpoint = checkpoints.firstOrNull { it.id == "auto-${session?.id}" }
@@ -72,6 +78,9 @@ fun ScanStatusScreen(vm: AppViewModel, onCompare: () -> Unit, onDevices: () -> U
             RadioReceptionCard(RfSymbol.BLUETOOTH, "BLE", health, devices.filter { it.source == ScanSource.BLE }, simulation,
                 if (simulation) null else vm.ble.scanModeNotice ?: if (vm.ble.usesExtendedAdvertisements) "기본·확장 BLE 광고 수신 · 기기가 지원하는 PHY 사용" else null)
         }
+        item { BleJournalPanel(journal, simulation, journalExportBusy, journalExportMessage) {
+            journalExport.launch("rf-ble-advertisements-${System.currentTimeMillis()}.jsonl")
+        } }
         if (expanded) item {
             val health = if (simulation) null else classicReceptionHealth(scanning, bluetoothPhase, vm.classic.hasHardware(),
                 vm.classic.isUsable(), vm.classic.active, vm.classic.lastReceivedAtMs, vm.classic.lastError)
@@ -186,11 +195,13 @@ internal fun DiscoveryRangePanel(
         }
         Text(if (expanded) "일반 Bluetooth + Wi-Fi Direct 추가 · 일반 Bluetooth 검색 중에는 BLE가 잠시 쉽니다."
             else "BLE를 연속 수신하고 Wi-Fi AP를 주기적으로 확인합니다.", style = MaterialTheme.typography.bodySmall)
+        Text("비콘·짧은 광고를 우선 관측할 때는 BLE 우선을 유지하세요.", color = RfColors.primary, style = MaterialTheme.typography.labelSmall)
         if (expanded) Text("기지국 환경도 별도 참고 · 새 장비 수에는 포함하지 않습니다", color = RfColors.textDim, style = MaterialTheme.typography.labelSmall)
         if (expanded && scanning && !simulation) Text(when (phase) {
             BluetoothSweepPhase.CLASSIC -> "지금: 일반 Bluetooth 탐색 · BLE 교대 대기"
             BluetoothSweepPhase.BLE -> "지금: BLE 수신 · 다음은 일반 Bluetooth"
             BluetoothSweepPhase.WAITING -> "Bluetooth 검색 종료 확인 중 · BLE 대기"
+            BluetoothSweepPhase.RETRYING -> "BLE 오류 후 재시도 대기 · 수신 공백 있음"
             BluetoothSweepPhase.STOPPED -> "Bluetooth 탐색 준비 중"
         }, color = RfColors.primary, style = MaterialTheme.typography.labelMedium)
         ExplanationToggle("탐색 방식 자세히", detailsOpen) { detailsOpen = !detailsOpen }
@@ -214,6 +225,8 @@ internal fun bleReceptionHealth(scanning: Boolean, phase: BluetoothSweepPhase, e
         "일반 Bluetooth 검색 중 · 끝나면 BLE 수신을 다시 시작합니다", false, lastReceivedAtMs)
     else if (scanning && phase == BluetoothSweepPhase.WAITING) ScanHealth("종료 확인 대기",
         "Bluetooth 검색 종료 확인 중 · BLE 대기", false, lastReceivedAtMs)
+    else if (scanning && phase == BluetoothSweepPhase.RETRYING) ScanHealth("재시도 대기",
+        lastError ?: "BLE 탐색 오류 후 잠시 기다린 뒤 다시 요청합니다 · 대기 중에는 수신하지 않습니다", true, lastReceivedAtMs)
     else bleScanHealth(scanning, enabled, active, lastReceivedAtMs, lastError, nowMs)
 
 private fun classicReceptionHealth(scanning: Boolean, phase: BluetoothSweepPhase, hardware: Boolean, enabled: Boolean,

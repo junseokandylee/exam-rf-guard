@@ -15,6 +15,34 @@ import org.json.JSONObject
 class SnapshotStoreTest {
     @get:Rule val directory = TemporaryFolder()
 
+    @Test fun beaconFormatsRoundTripAndOldOrFutureFormatNamesDoNotBreakVersionThree() {
+        val signal = SnapshotSignal("beacon", ScanSource.BLE, "BLE 기기", -70.0, 1000, 1000, 1, "Apple · 광고", null,
+            radioMetadata = RadioMetadata(ble = BleRadioMetadata(beaconFormats = listOf(BeaconFormat.IBEACON_COMPATIBLE, BeaconFormat.EDDYSTONE_TLM))))
+        val baseline = SignalSnapshot("before", "Room", "before", 0, 0, false, emptyList())
+        val saved = baseline.copy(id = "after", label = "after", capturedAtMs = 2000, signals = listOf(signal))
+        val store = SnapshotStore(directory.root)
+        store.save(listOf(saved))
+        assertEquals(saved, store.load().single())
+        val report = signalReport(baseline, store.load().single(), emptyList())
+        assertTrue(report.contains("BLE 비콘 광고"))
+        assertTrue(report.contains("iBeacon 호환 형식 · Eddystone TLM"))
+        assertTrue(report.contains(BEACON_FORMAT_NOTE))
+
+        val file = File(directory.root, "signal-snapshots.json")
+        val json = JSONObject(file.readText())
+        assertEquals(3, json.getInt("version"))
+        val ble = json.getJSONArray("snapshots").getJSONObject(0).getJSONArray("signals").getJSONObject(0)
+            .getJSONObject("radioMetadata").getJSONObject("ble")
+        ble.getJSONArray("beaconFormats").put("FUTURE_BEACON_FORMAT").put(BeaconFormat.IBEACON_COMPATIBLE.name)
+        file.writeText(json.toString())
+        assertEquals(signal.radioMetadata, store.load().single().signals.single().radioMetadata)
+        ble.remove("beaconFormats")
+        file.writeText(json.toString())
+        val legacy = store.load().single().signals.single()
+        assertTrue(legacy.radioMetadata!!.ble!!.beaconFormats.isEmpty())
+        assertEquals("Bluetooth 장비 · 유형 미확인", legacy.equipmentType())
+    }
+
     @Test fun savedSnapshotsSurviveNewStoreInstanceWithNullFieldsAndUnicode() {
         val snapshot = SignalSnapshot("id", "3층 제1시험실", "입실 전", 3000, 1000, true,
             listOf(SnapshotSignal("AA:BB:CC:DD:EE:FF", ScanSource.BLE, "이어폰", null, 1000, 2000, 1, "Apple · 광고", null)))

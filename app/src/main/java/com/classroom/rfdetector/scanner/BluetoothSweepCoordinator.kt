@@ -4,12 +4,13 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
-enum class BluetoothSweepPhase { STOPPED, BLE, CLASSIC, WAITING }
+enum class BluetoothSweepPhase { STOPPED, BLE, CLASSIC, WAITING, RETRYING }
 
 /** Main-thread owner: Classic discovery and BLE reception never run together. */
 class BluetoothSweepCoordinator(
@@ -20,6 +21,8 @@ class BluetoothSweepCoordinator(
     private val stopClassic: () -> Unit,
     private val isClassicDiscoveryIdle: () -> Boolean,
     private val onPhase: (BluetoothSweepPhase) -> Unit,
+    private val isBleActive: () -> Boolean = { true },
+    private val bleRetryDelayMs: () -> Long? = { null },
 ) {
     private var job: Job? = null
     private var generation = 0L
@@ -35,10 +38,7 @@ class BluetoothSweepCoordinator(
                         delay(5_000)
                         continue
                     }
-                    onPhase(BluetoothSweepPhase.BLE)
-                    startBle()
-                    if (!expanded) awaitCancellation()
-                    delay(45_000)
+                    receiveBle(token, expanded)
                     stopBle()
                     onPhase(BluetoothSweepPhase.CLASSIC)
                     val finished = CompletableDeferred<Unit>()
@@ -52,6 +52,29 @@ class BluetoothSweepCoordinator(
                     onPhase(BluetoothSweepPhase.STOPPED)
                 }
             }
+        }
+    }
+
+    private suspend fun receiveBle(token: Long, expanded: Boolean) = coroutineScope {
+        onPhase(BluetoothSweepPhase.BLE)
+        startBle()
+        val recovery = launch {
+            while (isActive && token == generation) {
+                delay(1_000)
+                if (isBleActive()) continue
+                val backoff = bleRetryDelayMs() ?: continue
+                onPhase(BluetoothSweepPhase.RETRYING)
+                delay(backoff.coerceAtLeast(5_000))
+                while (!awaitClassicIdle(token)) delay(5_000)
+                if (!isActive || token != generation) return@launch
+                onPhase(BluetoothSweepPhase.BLE)
+                startBle()
+            }
+        }
+        try {
+            if (expanded) delay(45_000) else awaitCancellation()
+        } finally {
+            recovery.cancel()
         }
     }
 

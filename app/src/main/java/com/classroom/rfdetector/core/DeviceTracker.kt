@@ -12,6 +12,7 @@ class DeviceTracker {
         var hidden = false
         var everHidden = false
         var radioMetadata: RadioMetadata? = null
+        val beaconFormats = LinkedHashSet<BeaconFormat>()
         val manufacturerIds = LinkedHashSet<Int>()
         var ema: Double? = null
         var tx: Double? = null
@@ -47,6 +48,13 @@ class DeviceTracker {
         if (!late || t.name == null) obs.name?.takeIf { it.isNotBlank() }?.let { t.name = it }
         if (!late) t.hidden = obs.hidden
         if (!late) t.radioMetadata = obs.radioMetadata?.snapshotCopy()
+        if (obs.source == ScanSource.BLE) {
+            t.beaconFormats.addAll(obs.radioMetadata?.ble?.beaconFormats.orEmpty())
+            if (t.beaconFormats.isNotEmpty()) {
+                val latest = t.radioMetadata ?: RadioMetadata()
+                t.radioMetadata = latest.copy(ble = (latest.ble ?: BleRadioMetadata()).copy(beaconFormats = t.beaconFormats.toList()))
+            }
+        }
         t.everHidden = t.everHidden || obs.hidden
         obs.rssi?.let { r ->
             if (!late) {

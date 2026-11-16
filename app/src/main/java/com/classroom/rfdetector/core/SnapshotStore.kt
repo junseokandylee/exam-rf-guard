@@ -123,6 +123,7 @@ class SnapshotStore(private val directory: File) {
         put("classicDeviceClass", metadata.classicDeviceClass ?: JSONObject.NULL)
         put("ble", metadata.ble?.let { ble -> JSONObject().apply {
             put("serviceUuids", JSONArray(ble.serviceUuids))
+            put("beaconFormats", JSONArray(ble.beaconFormats.map { it.name }))
             put("connectable", ble.connectable ?: JSONObject.NULL); put("legacy", ble.legacy ?: JSONObject.NULL)
             put("primaryPhy", ble.primaryPhy ?: JSONObject.NULL); put("secondaryPhy", ble.secondaryPhy ?: JSONObject.NULL)
         } } ?: JSONObject.NULL)
@@ -138,6 +139,11 @@ class SnapshotStore(private val directory: File) {
             connectable = if (ble.isNull("connectable")) null else ble.getBoolean("connectable"),
             legacy = if (ble.isNull("legacy")) null else ble.getBoolean("legacy"),
             primaryPhy = ble.nullableInt("primaryPhy"), secondaryPhy = ble.nullableInt("secondaryPhy"),
+            beaconFormats = ble.optJSONArray("beaconFormats")?.let { formats ->
+                (0 until formats.length()).mapNotNull { index ->
+                    BeaconFormat.entries.firstOrNull { it.name == formats.optString(index) }
+                }.distinct()
+            } ?: emptyList(),
         ) },
     )
 

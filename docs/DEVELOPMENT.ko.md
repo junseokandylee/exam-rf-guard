@@ -1,8 +1,8 @@
 # 빌드·구조·검증 안내
 
-일반 사용자는 [README](../README.md)와 [화면 사용법](QUICKSTART.ko.md)을 먼저 참고하세요. 이 문서는 v1.3.1-preview.1 구현을 확인하거나 수정하는 개발자를 위한 설명입니다.
+일반 사용자는 [README](../README.md)와 [화면 사용법](QUICKSTART.ko.md)을 먼저 참고하세요. 이 문서는 v1.4.0-preview.1 구현을 확인하거나 수정하는 개발자를 위한 설명입니다.
 
-앱 버전은 `versionName = "1.3.1-preview.1"`, `versionCode = 5`입니다. 스냅샷 저장 형식은 v3이며 v1·v2 자료를 읽습니다.
+앱 버전은 `versionName = "1.4.0-preview.1"`, `versionCode = 6`입니다. 스냅샷 저장 형식은 v3이며 v1·v2 자료를 읽습니다.
 
 ## 빌드 환경
 
@@ -85,7 +85,19 @@ macOS/Linux에서는 `./gradlew testDebugUnitTest assembleDebug lintDebug`를 �
 
 Classic 중지 시 앱이 시작한 회차에 대해서만 `cancelDiscovery()`를 한 번 요청합니다. 취소 요청 반환을 종료 완료로 간주하지 않으며 `adapter.isDiscovering=false` 확인 뒤 BLE를 재개합니다. 미종료 상태는 `WAITING`으로 표시하고 250ms 간격 10회 확인 뒤 5초 쉬고 재확인합니다. `BLE 우선`으로 바꾸거나 새로 시작할 때도 종료 확인을 건너뛰지 않습니다. 다른 앱의 검색을 취소하지 않으므로 최대 16초는 회차의 대기 시간이며 BLE 중단 시간 전체의 상한이 아닙니다.
 
-`BleScanner`는 `isLeExtendedAdvertisingSupported`를 확인한 뒤 `setLegacy(false)`·`PHY_LE_ALL_SUPPORTED`를 사용합니다. LOW_LATENCY·ALL_MATCHES·보고 지연 0은 유지합니다. 확장 미지원은 기본 광고로 시작하고, 확장 시작 실패는 기본 모드로 한 번 재시도합니다. `usesExtendedAdvertisements`와 `scanModeNotice`로 사용 중인 방식과 이유를 노출합니다. 권한·Bluetooth 꺼짐 오류를 지원 실패로 숨기지 않습니다. BLE의 확장 광고 지원과 UI의 `범위 확장` 선택은 서로 다른 개념입니다. [ScanSettings 공식 계약](https://developer.android.com/reference/android/bluetooth/le/ScanSettings.Builder)
+`BleScanner`는 `isLeExtendedAdvertisingSupported`를 확인한 뒤 `setLegacy(false)`·`PHY_LE_ALL_SUPPORTED`를 사용합니다. LOW_LATENCY·ALL_MATCHES·보고 지연 0과 필터 없는 요청을 유지합니다. 확장 미지원은 기본 광고로 시작하고, 확장 기능 미지원 오류(4)·설정 예외만 기본 모드로 한 번 전환합니다. 등록·내부·자원 오류(2/3/5)는 최소 5초, 과빈도 오류(6)는 30초를 기다린 뒤 coordinator가 재시도합니다. 정상 수신·단순 무광고 상태에서는 재시작하지 않습니다. 종료·다음 Classic 차례는 예약된 재시도를 취소하며 외부 Classic 검색도 종료 확인 전에는 BLE를 재개하지 않습니다. `RETRYING`은 수신 공백으로 표시·기록합니다. 권한·Bluetooth 꺼짐 오류를 지원 실패로 숨기지 않습니다. BLE의 확장 광고 지원과 UI의 `범위 확장` 선택은 서로 다른 개념입니다. [ScanSettings 공식 계약](https://developer.android.com/reference/android/bluetooth/le/ScanSettings.Builder)
+
+### BLE 광고별 원본 기록과 비콘 형식
+
+`onAdvertisement`는 활성 콜백의 단일·배치 결과마다 `onObs`보다 먼저 호출됩니다. 이름·RSSI·회사·서비스·connectable 조건으로 버리지 않습니다. 실제 수신 시각을 검증한 결과만 요약 추적에 넣으며, 시작 이전 시각·무효 시각·해석 오류는 각각 `BEFORE_SCAN`·`INVALID_TIMESTAMP`·`DECODE_ERROR`로 원본 기록에 남깁니다. 오래된 중지 콜백은 새 세션에 넣지 않습니다. `neverForLocation`은 일부 비콘을 필터링할 수 있으므로 선언하지 않으며 위치 권한을 유지합니다. [Android 권한 설명](https://developer.android.com/develop/connectivity/bluetooth/bt-permissions)
+
+`BleAdvertisementJournal`은 앱 내부 SQLite/WAL에 광고 원본 hex·Android 부팅 기준 시각·벽시계 수신 시각·주소·RSSI·잘림 상태·PHY·SID를 행별 저장합니다. 동일한 주소·바이트·시각도 앱에서 합치지 않습니다. 이것은 Android 광고 결과의 기록이며 HCI 로그나 무선 전 패킷의 pcap이 아닙니다. `rawRecordHex=null`과 빈 문자열은 구분합니다.
+
+콜백은 최대 4096개 대기열에 접수하고 별도 단일 writer가 최대 128행씩 트랜잭션으로 저장합니다. 화면은 `received = written + pending + failed`를 구분하며, 포화·쓰기 오류를 실패로 알립니다. 쓰기 성공 이전의 강제 종료 유실은 보장하지 않습니다. `beginSession`·`endSession`과 탐색 상태 행을 남기며 종료 표시가 없는 세션은 미완결로 내보냅니다. 실제 탐색의 공간 이름은 시작 때 고정하여 원본과 요약의 공간이 달라지지 않게 합니다.
+
+JSONL 내보내기는 앱에 보존된 모든 실제 세션을 포함합니다. writer가 경계를 확정한 뒤 별도 IO 읽기로 내보내므로 느린 출력이 새 광고 쓰기를 막지 않습니다. 메타데이터에 단위·범위·완전성 한계를 남기고 알려진 저장 실패도 내보냅니다. 원본 광고의 비콘 식별 정보와 서비스 데이터는 민감한 식별 단서일 수 있으며 주소 익명화·추가 암호화는 없습니다.
+
+`identifyBeaconFrames`는 iBeacon 호환, AltBeacon, Eddystone UID/URL/TLM/암호화 TLM/EID의 헤더와 길이를 검사합니다. `BleRadioMetadata.beaconFormats`는 주소별 현재 탐색에서 본 형식의 합집합이며 스냅샷 v3의 선택 필드로 저장합니다. 알려지지 않은 형식과 잘린 광고도 원본은 저장합니다. 형식은 하드웨어 제조사·모델의 인증이 아니며 비콘 ID로 서로 다른 주소를 병합하지 않습니다. 광고 URL을 열거나 송신 출력값을 거리 보정값으로 쓰지 않습니다. [AltBeacon 규격](https://github.com/AltBeacon/spec) · [Eddystone 규격](https://github.com/google/eddystone/blob/master/protocol-specification.md)
 
 `ClassicBluetoothScanner`는 자신의 discovery 시작 후 `ACTION_FOUND`로 받은 주소·이름·RSSI·DeviceClass만 사용합니다. 같은 회차의 주소는 한 번 세고, 다음 회차의 실제 발견 응답은 새 관측이 될 수 있습니다. `ACTION_FOUND`에는 원래 패킷 타임스탬프가 없으므로 기록 시각은 방송 수신 시각입니다. 페어링 목록·별칭·연결 상태를 주변 수신으로 바꾸지 않고, 페어링·소켓·연결 API를 사용하지 않습니다. 종료 후나 이전 회차 콜백은 무시합니다. [일반 Bluetooth 발견 API](https://developer.android.com/develop/connectivity/bluetooth/find-bluetooth-devices)
 
@@ -124,7 +136,7 @@ P2P 주소는 장비 주소 이력·비교·합집합에 출처를 구분해 포
 | `connectable`, `legacy`, `primaryPhy`, `secondaryPhy` | 수신 광고의 플래그·PHY. 연결 가능 광고와 실제 연결 상태를 구분하며 secondary PHY 0은 미사용 |
 | `classicDeviceClass` | 발견 방송의 DeviceClass 원본 값. 제품 모델을 확정하지 않음 |
 
-80+80 MHz의 합계 폭은 160이지만 UI에는 `channelWidthLabel`의 `80+80 MHz`를 사용합니다. 위 값은 Android가 제공한 발견 정보이며 직접 측정한 트래픽·간섭량이 아닙니다. 제조사 원본 payload·서비스 데이터 bytes·통신 내용은 추가 저장하지 않습니다. [Wi-Fi ScanResult](https://developer.android.com/reference/android/net/wifi/ScanResult), [BLE ScanResult](https://developer.android.com/reference/android/bluetooth/le/ScanResult)
+80+80 MHz의 합계 폭은 160이지만 UI에는 `channelWidthLabel`의 `80+80 MHz`를 사용합니다. 위 값은 Android가 제공한 발견 정보이며 직접 측정한 트래픽·간섭량이 아닙니다. 스냅샷 메타데이터에는 비콘 형식 등 요약을 저장하고, 원본 광고 bytes는 별도 BLE journal에 저장합니다. 연결된 기기의 통신 내용은 수집하지 않습니다. [Wi-Fi ScanResult](https://developer.android.com/reference/android/net/wifi/ScanResult), [BLE ScanResult](https://developer.android.com/reference/android/bluetooth/le/ScanResult)
 
 ## Wi-Fi 채널·숨김 이력의 계약
 
@@ -210,7 +222,7 @@ A = 기기에서 받은 유효한 1m RSSI 기준, 없으면 −59 dBm 가정
 
 ## 검증과 남은 한계
 
-2026년 11월 16일 v1.3.1-preview.1 기준 268개 테스트, `assembleDebug`, `lintDebug`가 통과했습니다. 테스트 실패·오류·건너뜀은 0개이며 Lint는 오류 0개·경고 21개입니다. 테스트의 전체 목록은 [test 소스](../app/src/test/java/com/classroom/rfdetector)에 있습니다.
+2026년 11월 16일 v1.4.0-preview.1 기준 310개 테스트, `assembleDebug`, `lintDebug`가 통과했습니다. 테스트 실패·오류·건너뜀은 0개이며 Lint는 오류 0개·경고 21개입니다. 테스트의 전체 목록은 [test 소스](../app/src/test/java/com/classroom/rfdetector)에 있습니다.
 
 관측·비교·보존·식별·스캐너 콜백·Android UI·내보내기를 검증합니다. Wi-Fi 채널에서는 단발 관측·채널 이동·지연 수신·재등장, 주소 필터와 독립적인 보존, 숨김→이름 표시 후 과거 숨김 유지, v1/v2/v3 호환과 null/빈 목록 구분을 검증합니다. 화면 캡처에는 연습 모드나 결정적인 테스트 입력을 사용합니다. 실제 무선 수신 환경, 시스템 권한 대화상자의 단말별 차이, 센서 정확도, 발열·배터리를 대신 검증하지 않습니다.
 

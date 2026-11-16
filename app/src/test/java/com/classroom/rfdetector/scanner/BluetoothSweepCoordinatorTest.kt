@@ -25,11 +25,13 @@ class BluetoothSweepCoordinatorTest {
     private var completed: (() -> Unit)? = null
     private var phase = BluetoothSweepPhase.STOPPED
     private var bleStarts = 0
+    private var retryDelayMs: Long? = null
     private val sweep = BluetoothSweepCoordinator(scope,
         startBle = { assertFalse(classic); ble = true; bleStarts++ }, stopBle = { ble = false },
         startClassic = { finish -> assertFalse(ble); completed = finish; classic = classicAllowed; classicAllowed },
         stopClassic = { if (cancellationFinishesImmediately) classic = false },
-        isClassicDiscoveryIdle = { !classic }, onPhase = { phase = it })
+        isClassicDiscoveryIdle = { !classic }, onPhase = { phase = it },
+        isBleActive = { ble }, bleRetryDelayMs = { retryDelayMs })
 
     @After fun close() { sweep.stop(); scope.cancel() }
     private fun advance(seconds: Long) = shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(seconds))
@@ -140,5 +142,65 @@ class BluetoothSweepCoordinatorTest {
         assertTrue(ble)
         assertEquals(1, bleStarts)
         assertNull(completed)
+    }
+
+    @Test fun failedBleRecoversAfterBackoffWithoutCyclingHealthyReception() {
+        sweep.start(false)
+        ble = false
+        retryDelayMs = 5_000
+        advance(1)
+        assertEquals(BluetoothSweepPhase.RETRYING, phase)
+        advance(4)
+        assertEquals(1, bleStarts)
+        advance(1)
+        assertEquals(2, bleStarts)
+        assertTrue(ble)
+        advance(60)
+        assertEquals(2, bleStarts)
+    }
+
+    @Test fun tooFrequentFailureWaitsAndStopCancelsPendingRecovery() {
+        sweep.start(false)
+        ble = false
+        retryDelayMs = 30_000
+        advance(30)
+        assertEquals(1, bleStarts)
+        sweep.stop()
+        advance(60)
+        assertEquals(1, bleStarts)
+        assertEquals(BluetoothSweepPhase.STOPPED, phase)
+    }
+
+    @Test fun unrecoverableFailureDoesNotSpinAndExternalInquiryGatesRecovery() {
+        sweep.start(false)
+        ble = false
+        advance(60)
+        assertEquals(1, bleStarts)
+        retryDelayMs = 5_000
+        classic = true
+        cancellationFinishesImmediately = false
+        advance(20)
+        assertEquals(1, bleStarts)
+        assertEquals(BluetoothSweepPhase.WAITING, phase)
+        classic = false
+        advance(8)
+        assertEquals(2, bleStarts)
+        assertTrue(ble)
+    }
+
+    @Test fun delayedRetryCannotOverlapTheNextClassicRound() {
+        sweep.start(true)
+        advance(40)
+        ble = false
+        retryDelayMs = 30_000
+        advance(5)
+        assertEquals(BluetoothSweepPhase.CLASSIC, phase)
+        assertTrue(classic)
+        advance(15)
+        assertEquals(1, bleStarts)
+        assertFalse(ble)
+        advance(1)
+        assertEquals(2, bleStarts)
+        assertTrue(ble)
     }
 }

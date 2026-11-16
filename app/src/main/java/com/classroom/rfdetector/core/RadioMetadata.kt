@@ -6,7 +6,9 @@ data class RadioMetadata(
     val ble: BleRadioMetadata? = null,
     val classicDeviceClass: Int? = null,
 ) {
-    fun snapshotCopy(): RadioMetadata = copy(ble = ble?.let { it.copy(serviceUuids = it.serviceUuids.toList()) })
+    fun snapshotCopy(): RadioMetadata = copy(ble = ble?.let {
+        it.copy(serviceUuids = it.serviceUuids.toList(), beaconFormats = it.beaconFormats.toList())
+    })
 }
 
 data class WifiRadioMetadata(
@@ -35,4 +37,6 @@ data class BleRadioMetadata(
     val primaryPhy: Int? = null,
     /** Android PHY_UNUSED (0) means that there is no secondary advertising PHY. */
     val secondaryPhy: Int? = null,
+    /** Formats observed at least once for this address in the capture session, not only the last packet. */
+    val beaconFormats: List<BeaconFormat> = emptyList(),
 )

@@ -3,6 +3,7 @@ package com.classroom.rfdetector
 import android.content.Context
 import android.location.LocationManager
 import android.os.Build
+import android.net.Uri
 import androidx.core.location.LocationManagerCompat
 import com.classroom.rfdetector.core.DistanceClass
 import com.classroom.rfdetector.core.DeviceIdentityResolver
@@ -50,6 +51,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CancellationException
 import com.classroom.rfdetector.core.CheckpointStore
+import com.classroom.rfdetector.core.BleAdvertisementJournal
 import java.io.File
 import androidx.lifecycle.ViewModel
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -71,6 +73,10 @@ class AppViewModel(private val app: Context) : ViewModel() {
     val motion = MotionSensor(app)
     val geiger = GeigerController(app)
     val ble = BleScanner(app)
+    private val bleJournal = BleAdvertisementJournal(app)
+    val bleJournalStatus = bleJournal.status
+    val bleJournalExportBusy = MutableStateFlow(false)
+    val bleJournalExportMessage = MutableStateFlow<String?>(null)
     val wifi = WifiScanner(app, scope)
     val classic = ClassicBluetoothScanner(app)
     val wifiDirect = WifiDirectScanner(app, scope)
@@ -85,7 +91,8 @@ class AppViewModel(private val app: Context) : ViewModel() {
         startBle = { ble.start(::onObservation) }, stopBle = ble::stop,
         startClassic = { completed -> classic.start(::onObservation, completed) }, stopClassic = classic::stop,
         isClassicDiscoveryIdle = classic::isDiscoveryIdle,
-        onPhase = { bluetoothPhase.value = it })
+        onPhase = ::recordBluetoothPhase,
+        isBleActive = { ble.active }, bleRetryDelayMs = { ble.retryDelayMs })
 
     private val _devices = MutableStateFlow<List<TrackedDevice>>(emptyList())
     val devices: StateFlow<List<TrackedDevice>> = _devices
@@ -175,7 +182,22 @@ class AppViewModel(private val app: Context) : ViewModel() {
         }
         wifi.onError = { msg -> statusMsg.value = msg }
         wifiDirect.onError = { msg -> statusMsg.value = msg }
-        ble.onError = { msg -> statusMsg.value = msg }
+        ble.onError = { msg ->
+            statusMsg.value = msg
+            scanSession.value?.takeIf { scanning.value && !simMode.value }?.let {
+                bleJournal.recordScanState(it.id, System.currentTimeMillis(), "BLE_ERROR: $msg")
+            }
+        }
+        ble.onAdvertisement = { event ->
+            scanSession.value?.takeIf { scanning.value && !simMode.value }?.let {
+                bleJournal.record(it.id, event)
+            }
+        }
+        scope.launch {
+            bleJournalStatus.map { it.error }.distinctUntilChanged().collect { error ->
+                if (error != null) statusMsg.value = "BLE 광고 기록 확인 · $error"
+            }
+        }
         classic.onError = { msg -> statusMsg.value = msg }
     }
 
@@ -210,6 +232,16 @@ class AppViewModel(private val app: Context) : ViewModel() {
         newCount.value = 0
         statusMsg.value = null
         scanSession.value = ScanSession(java.util.UUID.randomUUID().toString(), System.currentTimeMillis(), areaDraft.value.trim().ifBlank { "시험실" })
+        if (!simMode.value) {
+            // The journal and summaries must agree on the room even before the first checkpoint.
+            scanSession.value = scanSession.value!!.copy(areaLocked = true)
+            try {
+                bleJournal.beginSession(scanSession.value!!)
+            } catch (_: IllegalStateException) {
+                statusMsg.value = "BLE 기록 저장소를 시작하지 못했습니다 · 앱을 다시 열고 저장 공간을 확인하세요"
+                return
+            }
+        }
         applyBaselineToSession()
         latestNewSignal.value = null
         latestNewWifiChannel.value = null
@@ -293,6 +325,7 @@ class AppViewModel(private val app: Context) : ViewModel() {
         wifi.stop()
         wifiDirect.stop()
         cellEnvironment.stop()
+        if (!simMode.value) scanSession.value?.let { bleJournal.endSession(it.id, System.currentTimeMillis()) }
         motion.stop()
         if (geigerOn.value) setGeiger(false)
     }
@@ -484,12 +517,43 @@ class AppViewModel(private val app: Context) : ViewModel() {
     }
 
     fun shutdown() {
+        if (closed) return
         stopScan()
         closed = true
         scope.cancel()
+        // An outstanding cloud/file export may be slow; do not hold the shared snapshot writer.
+        storageScope.launch(Dispatchers.IO) { bleJournal.close() }
     }
 
     override fun onCleared() { shutdown() }
+
+    private fun recordBluetoothPhase(phase: BluetoothSweepPhase) {
+        if (bluetoothPhase.value == phase) return
+        bluetoothPhase.value = phase
+        scanSession.value?.takeIf { scanning.value && !simMode.value }?.let {
+            bleJournal.recordScanState(it.id, System.currentTimeMillis(), phase.name)
+        }
+    }
+
+    fun exportBleJournal(uri: Uri?) {
+        if (uri == null || bleJournalExportBusy.value || closed) return
+        bleJournalExportBusy.value = true
+        bleJournalExportMessage.value = null
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val output = app.contentResolver.openOutputStream(uri, "wt")
+                        ?: error("저장 위치를 열 수 없습니다")
+                    output.use { bleJournal.exportTo(it) }
+                }
+                bleJournalExportMessage.value = "BLE 광고 기록 파일을 저장했습니다"
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                bleJournalExportMessage.value = "광고 기록 내보내기 실패 · 저장 위치와 공간을 확인하세요. 불완전한 출력 파일이 남을 수 있습니다."
+            } finally { bleJournalExportBusy.value = false }
+        }
+    }
 
     private fun preserveSession() {
         val session = scanSession.value ?: return

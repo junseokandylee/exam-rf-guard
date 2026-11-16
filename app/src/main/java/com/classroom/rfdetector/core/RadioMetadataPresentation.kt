@@ -4,6 +4,10 @@ package com.classroom.rfdetector.core
 fun RadioMetadata.detailFields(): List<Pair<String, String>> = buildList {
     wifi?.let { addAll(it.detailFields()) }
     ble?.let { metadata ->
+        if (metadata.beaconFormats.isNotEmpty()) {
+            add("관측된 비콘 광고 형식" to metadata.beaconFormats.distinct().joinToString(" · ") { it.label })
+            add("비콘 형식 해석" to BEACON_FORMAT_NOTE)
+        }
         metadata.legacy?.let { add("광고 형식" to if (it) "기본 BLE 광고" else "확장 BLE 광고") }
         metadata.connectable?.let { add("연결 가능 광고" to if (it) "예 · 실제 연결하지 않음" else "아니요 · 실제 연결 상태 아님") }
         metadata.primaryPhy?.let { add("기본 PHY" to phyName(it)) }

@@ -7,12 +7,16 @@ val SnapshotSignal.receivedRssi: Double? get() = rssi.takeUnless { source == Sca
 fun SnapshotSignal.equipmentType(): String = when (source) {
     ScanSource.WIFI -> "Wi-Fi 접속점 · 공유기/핫스폿"
     ScanSource.P2P -> "Wi-Fi Direct 주변 기기"
+    ScanSource.BLE -> if (radioMetadata?.ble?.beaconFormats.orEmpty().isNotEmpty()) "BLE 비콘 광고"
+        else audioNameMatch?.kind?.label ?: wearableNameMatch?.kind?.label ?: "Bluetooth 장비 · 유형 미확인"
     else -> audioNameMatch?.kind?.label ?: wearableNameMatch?.kind?.label ?: "Bluetooth 장비 · 유형 미확인"
 }
 
 fun TrackedDevice.equipmentType(): String = when (source) {
     ScanSource.WIFI -> "Wi-Fi 접속점 · 공유기/핫스폿"
     ScanSource.P2P -> "Wi-Fi Direct 주변 기기"
+    ScanSource.BLE -> if (radioMetadata?.ble?.beaconFormats.orEmpty().isNotEmpty()) "BLE 비콘 광고"
+        else identity.audioNameMatch?.kind?.label ?: identity.wearableNameMatch?.kind?.label ?: "Bluetooth 장비 · 유형 미확인"
     else -> identity.audioNameMatch?.kind?.label ?: identity.wearableNameMatch?.kind?.label ?: "Bluetooth 장비 · 유형 미확인"
 }
 

@@ -4,6 +4,45 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class RadioMetadataTest {
+    @Test fun beaconFormatsAreSessionEvidenceEvenWhenLatestOrLatePacketHasNoMetadata() {
+        val tracker = DeviceTracker()
+        fun observe(time: Long, metadata: RadioMetadata?) = tracker.update(
+            RfObservation("AA", ScanSource.BLE, null, -70, null, false, time, radioMetadata = metadata))
+        observe(3000, RadioMetadata(ble = BleRadioMetadata(legacy = false, beaconFormats = listOf(BeaconFormat.EDDYSTONE_UID))))
+        observe(4000, null)
+        val afterMissing = tracker.snapshot(4000).single().radioMetadata!!.ble!!
+        assertEquals(listOf(BeaconFormat.EDDYSTONE_UID), afterMissing.beaconFormats)
+        assertNull(afterMissing.legacy) // Do not borrow old packet metadata alongside the session formats.
+        observe(2000, RadioMetadata(ble = BleRadioMetadata(legacy = true, beaconFormats = listOf(BeaconFormat.EDDYSTONE_TLM))))
+        observe(5000, RadioMetadata(ble = BleRadioMetadata(connectable = false, beaconFormats = listOf(BeaconFormat.EDDYSTONE_UID))))
+        val device = tracker.snapshot(5000).single()
+        val metadata = device.radioMetadata!!.ble!!
+        assertEquals(listOf(BeaconFormat.EDDYSTONE_UID, BeaconFormat.EDDYSTONE_TLM), metadata.beaconFormats)
+        assertEquals(false, metadata.connectable)
+        assertNull(metadata.legacy)
+        assertEquals("BLE 비콘 광고", device.equipmentType())
+        assertNull(device.referenceRssiAt1m)
+        tracker.update(RfObservation("BB", ScanSource.BLE, null, -65, null, false, 5000))
+        assertNull(tracker.snapshot(5000).first { it.key == "BB" }.radioMetadata)
+        tracker.clear()
+        observe(6000, null)
+        assertNull(tracker.snapshot(6000).single().radioMetadata)
+    }
+
+    @Test fun beaconFormatsAreDetachedAtInputAndSnapshotBoundaries() {
+        val formats = mutableListOf(BeaconFormat.IBEACON_COMPATIBLE)
+        val tracker = DeviceTracker()
+        tracker.update(RfObservation("AA", ScanSource.BLE, null, -60, null, false, 1000,
+            radioMetadata = RadioMetadata(ble = BleRadioMetadata(beaconFormats = formats))))
+        formats.clear()
+        val saved = SignalSnapshot.capture("saved", "Room", "after", 1000, 0, false, tracker.snapshot(1000))
+        tracker.update(RfObservation("AA", ScanSource.BLE, null, -60, null, false, 2000,
+            radioMetadata = RadioMetadata(ble = BleRadioMetadata(beaconFormats = listOf(BeaconFormat.ALTBEACON)))))
+        assertEquals(listOf(BeaconFormat.IBEACON_COMPATIBLE), saved.signals.single().radioMetadata!!.ble!!.beaconFormats)
+        assertEquals("BLE 비콘 광고", saved.signals.single().equipmentType())
+        assertEquals(2, tracker.snapshot(2000).single().radioMetadata!!.ble!!.beaconFormats.size)
+    }
+
     private fun wifi(time: Long, frequency: Int, metadata: WifiRadioMetadata?) = RfObservation(
         "AA", ScanSource.WIFI, "AP", -60, null, false, time, frequencyMhz = frequency,
         radioMetadata = metadata?.let { RadioMetadata(wifi = it) },
